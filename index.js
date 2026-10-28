@@ -2,9 +2,14 @@
  * `opencode-live` bundle plugin.
  *
  * Registers one subagent provider (`opencode-live`, which drives `opencode acp`)
- * and the trace data route the native Client panel reads (`/opencode-live/state`
- * snapshot, `/opencode-live/events` SSE). The browser renders the panel itself;
- * this route carries data only.
+ * and the trace/config routes the native Client panel reads:
+ *
+ *   GET  <path>/state    – run snapshot (optionally ?sessionId=…)
+ *   GET  <path>/events   – SSE stream (optionally ?sessionId=…)
+ *   GET  <path>/config   – the row's editable configuration
+ *   POST <path>/config   – persist configuration through the config editor
+ *
+ * The browser renders all UI; these routes carry data only.
  *
  * @module dsh-opencode-live
  */
@@ -16,10 +21,13 @@ import { TraceHub } from './lib/trace.js';
 export const name = 'opencode-live';
 export const inject = ['subagents', 'webServer'];
 
+/** Keys the settings page may write back. */
+const EDITABLE_KEYS = ['command', 'args', 'permission', 'env', 'path', 'model', 'mode'];
+
 /**
  * Loader-row configuration. Declaring it gives the row a real schema, so the
- * Plugins settings page renders an editor and persists changes through the
- * profile patch layer instead of hand-edited YAML.
+ * settings page can render typed fields and persist them through the profile
+ * patch layer instead of hand-edited YAML.
  */
 export const Config = z.object({
   command: z.string().description('OpenCode executable; omit to use $OPENCODE_BIN, ~/.opencode/bin/opencode, or PATH.'),
@@ -33,11 +41,11 @@ export const Config = z.object({
 });
 
 /**
- * Install the provider and the panel route.
+ * Install the provider and the panel routes.
  *
- * Both registrations go through `ctx.effect` so Cordis owns their disposal:
- * disabling or reloading this row must unregister the route before the next
- * activation registers it again.
+ * Registrations go through `ctx.effect` so Cordis owns their disposal: disabling
+ * or reloading this row must unregister the route before the next activation
+ * registers it again.
  *
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {object} [config] loader row config
@@ -51,7 +59,7 @@ export function apply(ctx, config = {}) {
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: resolved.path,
-    handler: createHandler(resolved, hub),
+    handler: createHandler(resolved, hub, ctx),
   }));
 
   try {
@@ -77,7 +85,7 @@ function normalizeConfig(config) {
   };
 }
 
-function createHandler(config, hub) {
+function createHandler(config, hub, ctx) {
   return (req, res) => {
     let url;
     try {
@@ -92,18 +100,29 @@ function createHandler(config, hub) {
     if (path === config.path) return serveInfo(res);
     if (path === `${config.path}/state`) return serveState(res, hub, sessionId);
     if (path === `${config.path}/events`) return serveEvents(req, res, hub, sessionId);
+    if (path === `${config.path}/config`) {
+      if (req.method === 'GET' || req.method === undefined) return serveConfig(res, ctx);
+      if (req.method === 'POST') {
+        void saveConfigRoute(req, res, ctx);
+        return undefined;
+      }
+      res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('method not allowed');
+      return undefined;
+    }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('not found');
+    return undefined;
   };
 }
 
-/** Base path: a small machine-readable statement, not the removed HTML page. */
+/** Base path: a small machine-readable statement. */
 function serveInfo(res) {
   res.writeHead(200, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
   });
-  res.end(JSON.stringify({ ok: true, panel: 'native', state: 'state', events: 'events' }));
+  res.end(JSON.stringify({ ok: true, panel: 'native', state: 'state', events: 'events', config: 'config' }));
 }
 
 function serveState(res, hub, sessionId) {
@@ -142,4 +161,104 @@ function serveEvents(req, res, hub, sessionId) {
   req.on('close', close);
   req.on('error', close);
   res.on('error', close);
+}
+
+function editorOf(ctx) {
+  return typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined;
+}
+
+function rowOf(editor) {
+  const rows = typeof editor?.configuration === 'function' ? editor.configuration() : [];
+  for (const row of rows) {
+    const entry = row?.entry ?? row;
+    const ids = [entry?.id, entry?.options?.id, entry?.options?.patchId]
+      .filter((value) => typeof value === 'string');
+    if (ids.some((id) => id === 'opencode-live' || id.endsWith('opencode-live') || id.endsWith(':opencode-live'))) {
+      return row;
+    }
+  }
+  return undefined;
+}
+
+function readConfig(ctx) {
+  const editor = editorOf(ctx);
+  if (editor === undefined) return { writable: false, values: {} };
+  const row = rowOf(editor);
+  if (row === undefined) return { writable: false, values: {} };
+  const merged = { ...(row.inherited ?? {}), ...(row.override ?? {}) };
+  const values = {};
+  for (const key of EDITABLE_KEYS) {
+    if (merged[key] !== undefined) values[key] = merged[key];
+  }
+  return { writable: true, values };
+}
+
+function serveConfig(res, ctx) {
+  res.writeHead(200, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  res.end(JSON.stringify(readConfig(ctx)));
+}
+
+async function saveConfigRoute(req, res, ctx) {
+  let body;
+  try {
+    body = await readJsonBody(req);
+  } catch {
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'invalid-json' }));
+    return;
+  }
+  const editor = editorOf(ctx);
+  const row = editor === undefined ? undefined : rowOf(editor);
+  if (editor === undefined || row === undefined) {
+    res.writeHead(409, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'no-config-editor' }));
+    return;
+  }
+  const patch = {};
+  if (body !== null && typeof body === 'object') {
+    for (const key of EDITABLE_KEYS) {
+      if (Object.hasOwn(body, key)) patch[key] = body[key];
+    }
+  }
+  if (Object.keys(patch).length === 0) {
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'nothing-to-save' }));
+    return;
+  }
+  // Answer first: the write reconciles the Loader and may reload this plugin.
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({ ok: true, saved: patch }));
+  void Promise.resolve()
+    .then(() => editor.edit(row.entry, (current) => ({ ...current, ...patch })))
+    .catch((error) => {
+      ctx.logger?.warn?.(`opencode-live: config save failed: ${error?.message ?? error}`);
+    });
+}
+
+function readJsonBody(req, limit = 64 * 1024) {
+  return new Promise((resolve, reject) => {
+    let size = 0;
+    const chunks = [];
+    req.on('data', (chunk) => {
+      size += chunk.length;
+      if (size > limit) {
+        req.destroy();
+        reject(new Error('body too large'));
+        return;
+      }
+      chunks.push(chunk);
+    });
+    req.on('end', () => {
+      const text = Buffer.concat(chunks).toString('utf8');
+      try {
+        resolve(text.length === 0 ? {} : JSON.parse(text));
+      } catch (error) {
+        reject(error);
+      }
+    });
+    req.on('error', reject);
+  });
 }

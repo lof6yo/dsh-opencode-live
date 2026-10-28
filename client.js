@@ -18,6 +18,17 @@ window.__ModuleLoader__.load({
         autoOpen: '任务开始时自动展开右侧栏',
         autoOpenDesc: '关闭后，OpenCode 任务只在面板里静默更新，不再把右侧栏弹出来。',
         sectionTitle: 'OpenCode Live',
+        cfgTitle: '会话配置',
+        cfgModel: '会话模型（model）',
+        cfgModelPlaceholder: '留空 = 用 OpenCode 默认模型',
+        cfgMode: '会话 agent（mode）',
+        cfgModePlaceholder: '留空 = 用 OpenCode 默认 agent',
+        cfgPermission: '权限策略（permission）',
+        cfgSave: '保存',
+        cfgSaving: '保存中…',
+        cfgSaved: '已保存；插件重载后生效',
+        cfgError: '保存失败',
+        cfgReadonly: '当前环境没有 config editor，无法保存',
         guideDesc: '实时查看 OpenCode 的 agent、工具调用和它自己派生的子 agent。',
       },
       en: {
@@ -31,6 +42,17 @@ window.__ModuleLoader__.load({
         autoOpen: 'Expand the right sidebar when a task starts',
         autoOpenDesc: 'Off: OpenCode runs still stream into the panel, but the panel no longer opens itself.',
         sectionTitle: 'OpenCode Live',
+        cfgTitle: 'Session configuration',
+        cfgModel: 'Session model',
+        cfgModelPlaceholder: 'empty = OpenCode default',
+        cfgMode: 'Session agent (mode)',
+        cfgModePlaceholder: 'empty = OpenCode default agent',
+        cfgPermission: 'Permission policy',
+        cfgSave: 'Save',
+        cfgSaving: 'Saving…',
+        cfgSaved: 'Saved; applies after the plugin reloads',
+        cfgError: 'Save failed',
+        cfgReadonly: 'No config editor here; cannot save',
         guideDesc: 'Live view of OpenCode\'s agent, tool calls, and the subagents it spawns.',
       },
     };
@@ -300,17 +322,60 @@ window.__ModuleLoader__.load({
     function Section({ ctx }) {
       const t = dict(ctx);
       const [autoOpen, setAutoOpenState] = React.useState(() => autoOpenEnabled());
-      const row = {
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        fontSize: 13,
-        color: 'inherit',
-        cursor: 'pointer',
+      const [config, setConfig] = React.useState(null);
+      const [status, setStatus] = React.useState('');
+
+      React.useEffect(() => {
+        let alive = true;
+        fetch(`${BASE}/config`)
+          .then((response) => response.json())
+          .then((body) => {
+            if (alive) setConfig(body);
+          })
+          .catch(() => {
+            if (alive) setConfig({ writable: false, values: {} });
+          });
+        return () => {
+          alive = false;
+        };
+      }, []);
+
+      const values = config?.values ?? {};
+      const writable = config?.writable === true;
+      const set = (key, value) => setConfig((previous) => ({
+        ...(previous ?? { writable: false, values: {} }),
+        values: { ...(previous?.values ?? {}), [key]: value },
+      }));
+      const save = () => {
+        setStatus('saving');
+        fetch(`${BASE}/config`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({
+            model: values.model ?? '',
+            mode: values.mode ?? '',
+            permission: values.permission ?? 'allow',
+          }),
+        })
+          .then((response) => response.json())
+          .then((body) => setStatus(body?.ok === true ? 'saved' : 'error'))
+          .catch(() => setStatus('error'));
       };
-      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 620, padding: '2px 0' } },
+
+      const field = { display: 'flex', flexDirection: 'column', gap: 4, fontSize: 12 };
+      const input = {
+        padding: '6px 8px',
+        borderRadius: 6,
+        border: '1px solid color-mix(in oklab, currentColor 20%, transparent)',
+        background: 'transparent',
+        color: 'inherit',
+        font: 'inherit',
+      };
+      const hint = { fontSize: 11, opacity: 0.55 };
+
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 14, maxWidth: 620, padding: '2px 0' } },
         h('div', { style: { fontSize: 14, fontWeight: 650 } }, t.sectionTitle),
-        h('label', { style: row },
+        h('label', { style: { display: 'flex', alignItems: 'center', gap: 10, fontSize: 13, cursor: 'pointer' } },
           h('input', {
             type: 'checkbox',
             checked: autoOpen,
@@ -320,101 +385,60 @@ window.__ModuleLoader__.load({
             },
           }),
           h('span', null, t.autoOpen)),
-        h('div', { style: { fontSize: 12, opacity: 0.6, lineHeight: 1.5 } }, t.autoOpenDesc));
-    }
-
-    function useScopedTrace(sessionId) {
-      const storeRef = React.useRef(null);
-      const [, bump] = React.useReducer((n) => n + 1, 0);
-      const key = sessionId ?? '';
-      if (storeRef.current === null || storeRef.current.key !== key) {
-        storeRef.current = { key, runs: new Map(), order: [], connected: false };
-      }
-      React.useEffect(() => {
-        const store = storeRef.current;
-        let frame = 0;
-        let closed = false;
-        const schedule = () => {
-          if (frame !== 0) return;
-          frame = requestAnimationFrame(() => {
-            frame = 0;
-            bump();
-          });
-        };
-        if (sessionId === undefined) {
-          const unsubscribe = subscribeFeed(() => schedule());
-          return () => {
-            unsubscribe();
-            if (frame !== 0) cancelAnimationFrame(frame);
-          };
-        }
-        const upsert = (run) => {
-          if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
-          if (!store.runs.has(run.id)) store.order.unshift(run.id);
-          const previous = store.runs.get(run.id);
-          store.runs.set(run.id, {
-            ...previous,
-            ...run,
-            events: Array.isArray(run.events) ? run.events : (previous?.events ?? []),
-          });
-        };
-        const query = `?sessionId=${encodeURIComponent(sessionId)}`;
-        fetch(`${BASE}/state${query}`)
-          .then((response) => response.json())
-          .then((body) => {
-            if (closed) return;
-            store.runs.clear();
-            store.order = [];
-            for (const run of body?.runs ?? []) upsert(run);
-            schedule();
-          })
-          .catch(() => {});
-        const source = new EventSource(`${BASE}/events${query}`);
-        source.onopen = () => {
-          store.connected = true;
-          schedule();
-        };
-        source.onerror = () => {
-          store.connected = false;
-          schedule();
-        };
-        source.onmessage = (message) => {
-          let payload;
-          try {
-            payload = JSON.parse(message.data);
-          } catch {
-            return;
-          }
-          if (payload.type === 'snapshot') {
-            store.runs.clear();
-            store.order = [];
-            for (const run of payload.runs ?? []) upsert(run);
-          } else if (payload.type === 'run') {
-            upsert(payload.run);
-          } else if (payload.type === 'event') {
-            const run = store.runs.get(payload.runId);
-            if (run !== undefined) {
-              run.events.push(payload.event);
-              if (payload.mode !== undefined) run.mode = payload.mode;
-              if (payload.model !== undefined) run.model = payload.model;
-            }
-          } else if (payload.type === 'finish') {
-            const run = store.runs.get(payload.runId);
-            if (run !== undefined) {
-              run.status = payload.status;
-              run.stopReason = payload.stopReason;
-              run.finishedAt = payload.finishedAt;
-            }
-          }
-          schedule();
-        };
-        return () => {
-          closed = true;
-          source.close();
-          if (frame !== 0) cancelAnimationFrame(frame);
-        };
-      }, [sessionId]);
-      return sessionId === undefined ? feed : storeRef.current;
+        h('div', { style: hint }, t.autoOpenDesc),
+        h('div', { style: { height: 1, background: 'color-mix(in oklab, currentColor 12%, transparent)' } }),
+        h('div', { style: { fontSize: 13, fontWeight: 600 } }, t.cfgTitle),
+        config === null
+          ? h('div', { style: hint }, '…')
+          : h(React.Fragment, null,
+            h('label', { style: field },
+              h('span', null, t.cfgModel),
+              h('input', {
+                style: input,
+                value: values.model ?? '',
+                placeholder: t.cfgModelPlaceholder,
+                onChange: (event) => set('model', event.target.value),
+              })),
+            h('label', { style: field },
+              h('span', null, t.cfgMode),
+              h('input', {
+                style: input,
+                value: values.mode ?? '',
+                placeholder: t.cfgModePlaceholder,
+                onChange: (event) => set('mode', event.target.value),
+              })),
+            h('label', { style: field },
+              h('span', null, t.cfgPermission),
+              h('select', {
+                style: input,
+                value: values.permission ?? 'allow',
+                onChange: (event) => set('permission', event.target.value),
+              },
+                h('option', { value: 'allow' }, 'allow'),
+                h('option', { value: 'reject' }, 'reject'))),
+            h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
+              h('button', {
+                type: 'button',
+                disabled: !writable || status === 'saving',
+                onClick: save,
+                style: {
+                  padding: '6px 12px',
+                  borderRadius: 6,
+                  border: '1px solid color-mix(in oklab, currentColor 25%, transparent)',
+                  background: 'transparent',
+                  color: 'inherit',
+                  cursor: writable ? 'pointer' : 'not-allowed',
+                  opacity: writable ? 1 : 0.5,
+                },
+              }, t.cfgSave),
+              h('span', { style: hint },
+                status === 'saved'
+                  ? t.cfgSaved
+                  : status === 'error'
+                    ? t.cfgError
+                    : status === 'saving'
+                      ? t.cfgSaving
+                      : writable ? '' : t.cfgReadonly))));
     }
 
     function Panel({ ctx, sessionId }) {
