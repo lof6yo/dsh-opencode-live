@@ -23,7 +23,8 @@ window.__ModuleLoader__.load({
         cfgMode: '会话 agent（mode）',
         cfgModePlaceholder: '留空 = 用 OpenCode 默认 agent',
         cfgPermission: '权限策略（permission）',
-        cfgAskFallback: '审批不可用时的回退（askFallback）',
+        cfgAskFallback: '拿不到用户回答时的回退（askFallback）',
+        cfgAskTimeout: '提问等待上限（毫秒，0 = 一直等）',
         cfgSave: '保存',
         cfgSaving: '保存中…',
         cfgSaved: '已保存；插件重载后生效',
@@ -47,7 +48,8 @@ window.__ModuleLoader__.load({
         cfgMode: 'Session agent (mode)',
         cfgModePlaceholder: 'empty = OpenCode default agent',
         cfgPermission: 'Permission policy',
-        cfgAskFallback: 'Fallback when approval is unavailable (askFallback)',
+        cfgAskFallback: 'Fallback when the question cannot reach the user (askFallback)',
+        cfgAskTimeout: 'Question timeout in milliseconds (0 waits forever)',
         cfgSave: 'Save',
         cfgSaving: 'Saving…',
         cfgSaved: 'Saved; applies after the plugin reloads',
@@ -336,6 +338,7 @@ window.__ModuleLoader__.load({
             mode: values.mode ?? '',
             permission: values.permission ?? 'ask',
             askFallback: values.askFallback ?? 'reject',
+            askTimeoutMs: Number(values.askTimeoutMs ?? 600000),
           }),
         })
           .then((response) => response.json())
@@ -408,6 +411,18 @@ window.__ModuleLoader__.load({
                 },
                   h('option', { value: 'reject' }, 'reject'),
                   h('option', { value: 'allow' }, 'allow')))
+              : null,
+            values.permission === 'ask' || values.permission === undefined
+              ? h('label', { style: field },
+                h('span', null, t.cfgAskTimeout),
+                h('input', {
+                  style: input,
+                  type: 'number',
+                  min: 0,
+                  step: 1000,
+                  value: values.askTimeoutMs ?? 600000,
+                  onChange: (event) => set('askTimeoutMs', Number(event.target.value)),
+                }))
               : null,
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
               h('button', {

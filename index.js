@@ -33,9 +33,11 @@ export const Config = z.object({
   command: z.string().description('OpenCode executable; omit to use $OPENCODE_BIN, ~/.opencode/bin/opencode, or PATH.'),
   args: z.array(z.string()).default(['acp']).description('Arguments passed to the executable.'),
   permission: z.union(['ask', 'allow', 'reject']).default('ask')
-    .description('How to answer OpenCode ACP permission requests: ask (DSH user approval), allow (auto-approve), or reject (read-only).'),
+    .description('How to answer OpenCode ACP permission requests: ask (a DSH question card with allow once / allow always / reject), allow (auto-approve), or reject (read-only).'),
   askFallback: z.union(['reject', 'allow']).default('reject')
-    .description('When permission is ask and the approval cannot be requested (no open turn, no answerer): fall back to this decision.'),
+    .description('When permission is ask and the question cannot reach the user (no answerer, timeout, cancelled run): fall back to this decision.'),
+  askTimeoutMs: z.number().default(600000)
+    .description('How long an ask question may stay unanswered, in milliseconds; 0 waits forever. After it, askFallback applies.'),
   env: z.dict(z.string()).default({}).description('Extra environment for the child, merged after credential scrubbing.'),
   path: z.string().default('/opencode-live').description('Route that serves the panel data (state + SSE).'),
   model: z.string().description('Pin the ACP session model, e.g. opencode-go/deepseek-v4.1-flash. Omit to keep the OpenCode default.'),
@@ -82,6 +84,9 @@ function normalizeConfig(config) {
     args: Array.isArray(config.args) ? config.args.map((value) => String(value)) : ['acp'],
     permission: config.permission === 'allow' || config.permission === 'reject' ? config.permission : 'ask',
     askFallback: config.askFallback === 'allow' ? 'allow' : 'reject',
+    askTimeoutMs: typeof config.askTimeoutMs === 'number' && Number.isFinite(config.askTimeoutMs) && config.askTimeoutMs >= 0
+      ? config.askTimeoutMs
+      : 600000,
     env: config.env !== null && typeof config.env === 'object' ? config.env : {},
     mode: typeof config.mode === 'string' && config.mode.length > 0 ? config.mode : undefined,
     model: typeof config.model === 'string' && config.model.length > 0 ? config.model : undefined,
