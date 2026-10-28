@@ -6,6 +6,19 @@ window.__ModuleLoader__.load({
 
     const BASE = '/opencode-live';
 
+    /** Fire-and-forget diagnostics to the Host; failures never affect the UI. */
+    function report(event, data) {
+      try {
+        fetch(`${BASE}/debug`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ event, data }),
+        }).catch(() => {});
+      } catch {
+        // diagnostics are best-effort
+      }
+    }
+
     const TEXT = {
       zh: {
         empty: '等待委派… 在 DSH 里调用 opencode 工具后，这里会实时出现它的 agent、工具和子 agent。',
@@ -453,6 +466,30 @@ window.__ModuleLoader__.load({
       return undefined;
     }
 
+    class PanelBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+      componentDidCatch(error) {
+        report('panel:error', {
+          message: String(error?.message ?? error),
+          stack: String(error?.stack ?? '').slice(0, 800),
+        });
+      }
+      render() {
+        if (this.state.error !== null) {
+          return h('pre', {
+            style: { padding: 12, whiteSpace: 'pre-wrap', color: 'var(--color-red-500, #f87171)', fontSize: 12 },
+          }, `OpenCode Live 渲染出错：\n${String(this.state.error?.stack ?? this.state.error)}`);
+        }
+        return this.props.children;
+      }
+    }
+
     function Panel({ ctx, sessionId: sessionIdProp }) {
       const t = dict(ctx);
       const sessionId = resolveSessionId(ctx, sessionIdProp);
@@ -506,12 +543,15 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
+        report('apply:start');
         // Restored to the shape that demonstrably worked: one inject fiber owns
         // both the tab type and its body, with no timers or retries inside.
         ctx.inject(['sidebarRightTabs'], (scope) => {
           try {
             const tabs = scope.sidebarRightTabs;
+            report('inject', { hasTabs: tabs !== null && tabs !== undefined && typeof tabs.register === 'function' });
             if (tabs === null || tabs === undefined || typeof tabs.register !== 'function') return;
+            report('type:register');
             scope.effect(() => tabs.register({
               id: 'dsh-opencode-live',
               kind: 'opencode-live',
@@ -526,14 +566,17 @@ window.__ModuleLoader__.load({
                 icon: Icon,
               }],
             }));
+            report('body:register');
             scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
               name: 'sidebar.right.pane.tab',
               key: 'dsh-opencode-live',
-            }, (props) => h(Panel, { ctx, sessionId: props?.sessionId }))));
+            }, (props) => h(PanelBoundary, null, h(Panel, { ctx, sessionId: props?.sessionId })))));
           } catch (error) {
+            report('register:error', { message: String(error?.message ?? error) });
             console.error('[dsh-opencode-live] right sidebar registration failed', error);
           }
         });
+        report('settings:register');
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
@@ -542,6 +585,7 @@ window.__ModuleLoader__.load({
           label: () => 'OpenCode Live',
         }, () => h(Section, { ctx })));
 
+        report('apply:end');
         ctx.effect(() => {
           const unsubscribe = subscribeFeed((payload) => {
             if (payload === undefined || payload.type !== 'run') return;

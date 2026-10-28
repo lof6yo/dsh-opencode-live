@@ -24,6 +24,9 @@ export const inject = ['subagents', 'webServer'];
 /** Keys the settings page may write back. */
 const EDITABLE_KEYS = ['command', 'args', 'permission', 'env', 'path', 'model', 'mode'];
 
+/** Bounded client diagnostics for this process (POST /debug, GET /debug). */
+const DEBUG_LOG = [];
+
 /**
  * Loader-row configuration. Declaring it gives the row a real schema, so the
  * settings page can render typed fields and persist them through the profile
@@ -100,6 +103,25 @@ function createHandler(config, hub, ctx) {
     if (path === config.path) return serveInfo(res);
     if (path === `${config.path}/state`) return serveState(res, hub, sessionId);
     if (path === `${config.path}/events`) return serveEvents(req, res, hub, sessionId);
+    if (path === `${config.path}/debug`) {
+      if (req.method === 'POST') {
+        void readJsonBody(req)
+          .then((body) => {
+            DEBUG_LOG.push({ at: Date.now(), ...(body !== null && typeof body === 'object' ? body : {}) });
+            while (DEBUG_LOG.length > 200) DEBUG_LOG.shift();
+            res.writeHead(204);
+            res.end();
+          })
+          .catch(() => {
+            res.writeHead(400);
+            res.end();
+          });
+        return undefined;
+      }
+      res.writeHead(200, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+      res.end(JSON.stringify(DEBUG_LOG));
+      return undefined;
+    }
     if (path === `${config.path}/config`) {
       if (req.method === 'GET' || req.method === undefined) return serveConfig(res, ctx);
       if (req.method === 'POST') {
