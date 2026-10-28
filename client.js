@@ -5,6 +5,7 @@ window.__ModuleLoader__.load({
     const h = React.createElement;
 
     const BASE = '/opencode-live';
+    const MAX_EVENTS_PER_RUN = 600;
 
     const TEXT = {
       zh: {
@@ -144,6 +145,7 @@ window.__ModuleLoader__.load({
         const run = feed.runs.get(payload.runId);
         if (run === undefined) return;
         run.events.push(payload.event);
+        if (run.events.length > MAX_EVENTS_PER_RUN) run.events.shift();
         if (payload.mode !== undefined) run.mode = payload.mode;
         if (payload.model !== undefined) run.model = payload.model;
         return;
@@ -171,10 +173,6 @@ window.__ModuleLoader__.load({
     function ensureFeed() {
       if (feed.started) return feed;
       feed.started = true;
-      fetch(`${BASE}/state`)
-        .then((response) => response.json())
-        .then((body) => notify({ type: 'snapshot', runs: body?.runs ?? [] }))
-        .catch(() => {});
       const source = new EventSource(`${BASE}/events`);
       feed.source = source;
       source.onopen = () => {
@@ -503,9 +501,114 @@ window.__ModuleLoader__.load({
           : null);
     }
 
+    function useScopedTrace(sessionId) {
+      const storeRef = React.useRef(null);
+      const [, bump] = React.useReducer((n) => n + 1, 0);
+      const key = sessionId ?? '';
+      if (storeRef.current === null || storeRef.current.key !== key) {
+        storeRef.current = { key, runs: new Map(), order: [], connected: false };
+      }
+      React.useEffect(() => {
+        const store = storeRef.current;
+        let frame = 0;
+        let closed = false;
+        const schedule = () => {
+          if (frame !== 0) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            bump();
+          });
+        };
+        if (sessionId === undefined) {
+          const unsubscribe = subscribeFeed(() => schedule());
+          return () => {
+            unsubscribe();
+            if (frame !== 0) cancelAnimationFrame(frame);
+          };
+        }
+        const upsert = (run) => {
+          if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
+          if (!store.runs.has(run.id)) store.order.unshift(run.id);
+          const previous = store.runs.get(run.id);
+          store.runs.set(run.id, {
+            ...previous,
+            ...run,
+            events: Array.isArray(run.events) ? run.events : (previous?.events ?? []),
+          });
+        };
+        const query = `?sessionId=${encodeURIComponent(sessionId)}`;
+        const source = new EventSource(`${BASE}/events${query}`);
+        source.onopen = () => {
+          store.connected = true;
+          schedule();
+        };
+        source.onerror = () => {
+          store.connected = false;
+          schedule();
+        };
+        source.onmessage = (message) => {
+          let payload;
+          try {
+            payload = JSON.parse(message.data);
+          } catch {
+            return;
+          }
+          if (payload.type === 'snapshot') {
+            store.runs.clear();
+            store.order = [];
+            for (const run of payload.runs ?? []) upsert(run);
+          } else if (payload.type === 'run') {
+            upsert(payload.run);
+          } else if (payload.type === 'event') {
+            const run = store.runs.get(payload.runId);
+            if (run !== undefined) {
+              run.events.push(payload.event);
+              if (run.events.length > MAX_EVENTS_PER_RUN) run.events.shift();
+              if (payload.mode !== undefined) run.mode = payload.mode;
+              if (payload.model !== undefined) run.model = payload.model;
+            }
+          } else if (payload.type === 'finish') {
+            const run = store.runs.get(payload.runId);
+            if (run !== undefined) {
+              run.status = payload.status;
+              run.stopReason = payload.stopReason;
+              run.finishedAt = payload.finishedAt;
+            }
+          }
+          schedule();
+        };
+        return () => {
+          closed = true;
+          source.close();
+          if (frame !== 0) cancelAnimationFrame(frame);
+        };
+      }, [sessionId]);
+      return sessionId === undefined ? feed : storeRef.current;
+    }
+
+    function useMountedSession(ctx) {
+      const right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined;
+      const subscribe = React.useCallback((notify) => {
+        if (typeof right?.mounted?.subscribe === 'function') return right.mounted.subscribe(notify);
+        return () => {};
+      }, [right]);
+      const read = React.useCallback(() => {
+        try {
+          return typeof right?.mounted?.getSnapshot === 'function' ? right.mounted.getSnapshot() : undefined;
+        } catch {
+          return undefined;
+        }
+      }, [right]);
+      if (typeof React.useSyncExternalStore === 'function') {
+        return React.useSyncExternalStore(subscribe, read, read);
+      }
+      return read();
+    }
+
     function Panel({ ctx, sessionId: sessionIdProp }) {
       const t = dict(ctx);
-      const sessionId = resolveSessionId(ctx, sessionIdProp);
+      const mounted = useMountedSession(ctx);
+      const sessionId = typeof sessionIdProp === 'string' && sessionIdProp.length > 0 ? sessionIdProp : mounted;
       const trace = useScopedTrace(sessionId);
       const scroller = React.useRef(null);
       const jump = (edge) => {

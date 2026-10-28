@@ -22,7 +22,10 @@ export const name = 'opencode-live';
 export const inject = ['subagents', 'webServer'];
 
 /** Keys the settings page may write back. */
-const EDITABLE_KEYS = ['command', 'args', 'permission', 'env', 'path', 'model', 'mode'];
+const EDITABLE_KEYS = ['model', 'mode', 'permission', 'askFallback', 'askTimeoutMs'];
+const PERMISSION_VALUES = new Set(['ask', 'allow', 'reject']);
+const ASK_FALLBACK_VALUES = new Set(['reject', 'allow']);
+const MAX_TIMEOUT_MS = 0x7fffffff;
 
 /**
  * Loader-row configuration. Declaring it gives the row a real schema, so the
@@ -38,6 +41,8 @@ export const Config = z.object({
     .description('When permission is ask and the question cannot reach the user (no answerer, timeout, cancelled run): fall back to this decision.'),
   askTimeoutMs: z.number().default(600000)
     .description('How long an ask question may stay unanswered, in milliseconds; 0 waits forever. After it, askFallback applies.'),
+  promptTimeoutMs: z.number().default(1800000)
+    .description('Hard upper bound for one OpenCode turn, in milliseconds; 0 disables the bound.'),
   env: z.dict(z.string()).default({}).description('Extra environment for the child, merged after credential scrubbing.'),
   path: z.string().default('/opencode-live').description('Route that serves the panel data (state + SSE).'),
   model: z.string().description('Pin the ACP session model, e.g. opencode-go/deepseek-v4.1-flash. Omit to keep the OpenCode default.'),
@@ -85,8 +90,11 @@ function normalizeConfig(config) {
     permission: config.permission === 'allow' || config.permission === 'reject' ? config.permission : 'ask',
     askFallback: config.askFallback === 'allow' ? 'allow' : 'reject',
     askTimeoutMs: typeof config.askTimeoutMs === 'number' && Number.isFinite(config.askTimeoutMs) && config.askTimeoutMs >= 0
-      ? config.askTimeoutMs
+      ? Math.min(config.askTimeoutMs, MAX_TIMEOUT_MS)
       : 600000,
+    promptTimeoutMs: typeof config.promptTimeoutMs === 'number' && Number.isFinite(config.promptTimeoutMs) && config.promptTimeoutMs >= 0
+      ? Math.min(config.promptTimeoutMs, MAX_TIMEOUT_MS)
+      : 1800000,
     env: config.env !== null && typeof config.env === 'object' ? config.env : {},
     mode: typeof config.mode === 'string' && config.mode.length > 0 ? config.mode : undefined,
     model: typeof config.model === 'string' && config.model.length > 0 ? config.model : undefined,
@@ -111,6 +119,16 @@ function createHandler(config, hub, ctx) {
     if (path === `${config.path}/config`) {
       if (req.method === 'GET' || req.method === undefined) return serveConfig(res, ctx);
       if (req.method === 'POST') {
+        if (!sameOriginRequest(req)) {
+          res.writeHead(403, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+          return undefined;
+        }
+        if (!isJsonRequest(req)) {
+          res.writeHead(415, { 'content-type': 'application/json; charset=utf-8' });
+          res.end(JSON.stringify({ ok: false, error: 'content-type-must-be-application-json' }));
+          return undefined;
+        }
         void saveConfigRoute(req, res, ctx);
         return undefined;
       }
@@ -171,6 +189,52 @@ function serveEvents(req, res, hub, sessionId) {
   res.on('error', close);
 }
 
+/** Browsers send Sec-Fetch-Site same-origin or an Origin header for same-origin POSTs. */
+function sameOriginRequest(req) {
+  const site = req.headers['sec-fetch-site'];
+  if (site === 'same-origin') return true;
+  const origin = req.headers.origin;
+  const host = req.headers.host;
+  if (typeof origin !== 'string' || origin.length === 0) return false;
+  try {
+    return typeof host === 'string' && new URL(origin).host === host;
+  } catch {
+    return false;
+  }
+}
+
+function isJsonRequest(req) {
+  const type = String(req.headers['content-type'] ?? '').toLowerCase();
+  return type.startsWith('application/json');
+}
+
+/** Validate the editable subset; unknown keys are ignored, wrong types are reported. */
+function sanitizePatch(body) {
+  const patch = {};
+  const clear = [];
+  const errors = [];
+  if (body === null || typeof body !== 'object') return { patch, clear, errors: ['body'] };
+  for (const key of EDITABLE_KEYS) {
+    if (!Object.hasOwn(body, key)) continue;
+    const value = body[key];
+    if (key === 'model' || key === 'mode') {
+      if (value === '' || value === null) clear.push(key);
+      else if (typeof value !== 'string' || value.length > 200) errors.push(key);
+      else patch[key] = value;
+    } else if (key === 'permission') {
+      if (!PERMISSION_VALUES.has(value)) errors.push(key);
+      else patch[key] = value;
+    } else if (key === 'askFallback') {
+      if (!ASK_FALLBACK_VALUES.has(value)) errors.push(key);
+      else patch[key] = value;
+    } else if (key === 'askTimeoutMs') {
+      if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > MAX_TIMEOUT_MS) errors.push(key);
+      else patch[key] = value;
+    }
+  }
+  return { patch, clear, errors };
+}
+
 function editorOf(ctx) {
   return typeof ctx.get === 'function' ? ctx.get('configEditor') : undefined;
 }
@@ -181,7 +245,7 @@ function rowOf(editor) {
     const entry = row?.entry ?? row;
     const ids = [entry?.id, entry?.options?.id, entry?.options?.patchId]
       .filter((value) => typeof value === 'string');
-    if (ids.some((id) => id === 'opencode-live' || id.endsWith('opencode-live') || id.endsWith(':opencode-live'))) {
+    if (ids.some((id) => id === 'opencode-live' || id.endsWith(':opencode-live'))) {
       return row;
     }
   }
@@ -225,18 +289,11 @@ async function saveConfigRoute(req, res, ctx) {
     res.end(JSON.stringify({ ok: false, error: 'no-config-editor' }));
     return;
   }
-  const patch = {};
-  const clear = [];
-  if (body !== null && typeof body === 'object') {
-    for (const key of EDITABLE_KEYS) {
-      if (!Object.hasOwn(body, key)) continue;
-      const value = body[key];
-      if ((key === 'model' || key === 'mode') && (value === '' || value === null)) {
-        clear.push(key);
-        continue;
-      }
-      patch[key] = value;
-    }
+  const { patch, clear, errors } = sanitizePatch(body);
+  if (errors.length > 0) {
+    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'invalid-value', fields: errors }));
+    return;
   }
   if (Object.keys(patch).length === 0 && clear.length === 0) {
     res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
