@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
         done: '完成',
         tokens: 'tokens',
         starting: '启动中…',
+        guideDesc: '实时查看 OpenCode 的 agent、工具调用和它自己派生的子 agent。',
       },
       en: {
         empty: 'Waiting for a delegation. Call the opencode tool in DSH and its agent, tools, and subagents appear here live.',
@@ -24,6 +25,7 @@ window.__ModuleLoader__.load({
         done: 'done',
         tokens: 'tokens',
         starting: 'starting…',
+        guideDesc: 'Live view of OpenCode\'s agent, tool calls, and the subagents it spawns.',
       },
     };
 
@@ -256,13 +258,26 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
-        ctx.slots.inject('main', () => ctx.slots.register({ name: 'main', key: 'opencode-live' }, () => h(Panel, { ctx })));
-        ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
-          name: 'sidebar.panellist',
-          id: 'opencode-live',
-          order: 30,
-          label: 'OpenCode Live',
-        }, (props) => h(Icon, { size: props?.size })));
+        const tabs = ctx.get?.('sidebarRightTabs') ?? ctx.sidebarRightTabs;
+        if (tabs === undefined || typeof tabs.register !== 'function') return;
+        ctx.effect(() => tabs.register({
+          id: 'dsh-opencode-live',
+          kind: 'opencode-live',
+          priority: 'extension',
+          keepMounted: true,
+          title: () => 'OpenCode Live',
+          guide: [{
+            id: 'opencode-live',
+            order: 40,
+            title: () => 'OpenCode Live',
+            description: () => dict(ctx).guideDesc,
+            icon: Icon,
+          }],
+        }));
+        ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+          name: 'sidebar.right.pane.tab',
+          key: 'dsh-opencode-live',
+        }, () => h(Panel, { ctx }))));
       },
     };
   },

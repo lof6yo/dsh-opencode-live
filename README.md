@@ -6,7 +6,7 @@
 - **实时**：Host 端把 ACP 事件镜像成 trace，原生面板（Client 插件，`main` + 侧边栏图标）直接渲染；数据走 `/opencode-live/state` + `/opencode-live/events`（SSE），不再提供 HTML 页面；
 - **不多加耦合**：OpenCode 用它自己的配置、模型和认证，DSH 只传 cwd + 任务文本。
 
-装好并重启后，侧边栏会出现一个 **OpenCode Live** 图标（终端样式），点开就是实时面板，与 DSH 同主题、不经过 iframe。
+装好并重启后，右侧边栏的「+」引导页里会出现 **OpenCode Live**，点开就是一个常驻的右侧标签页（和文件预览、浏览器同一栏），与 DSH 同主题、不经过 iframe。
 
 ## 面板里能看到什么
 
