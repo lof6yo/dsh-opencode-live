@@ -271,7 +271,7 @@ window.__ModuleLoader__.load({
             title: () => 'OpenCode Live',
             guide: [{
               id: 'opencode-live',
-              order: 40,
+              order: 1,
               title: () => 'OpenCode Live',
               description: () => dict(ctx).guideDesc,
               icon: Icon,
