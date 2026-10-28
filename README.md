@@ -27,10 +27,9 @@
 `cordis.patch.yml` 插入两行：provider（`opencode-live`）和工具（`opencode`，
 `maxDepth: provider-managed`）。
 
-ACP 客户端只用 Node 内置模块；唯一的外部依赖是 `@deepseek-ai/schemastery`（声明插件
-Config 用）。正常 npm 安装会自动装依赖；**以 link 方式安装时必须让它可解析**——在包目录
-执行一次 `pnpm install`，或把 profile 里的
-`node_modules/@deepseek-ai/schemastery` 软链到本包的 `node_modules/@deepseek-ai/`。
+ACP 客户端只用 Node 内置模块；`@deepseek-ai/schemastery`（声明插件 Config 用）声明为
+**peerDependency**，由 DSH 安装提供，link 方式安装时也会被正确解析，不需要本地
+`node_modules`。
 
 bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**（新的 Client 模块在启动时扫描），
 之后每次委派都会出现在面板里。卸载/禁用时 Host 侧通过 `ctx.effect` 释放路由与 provider。
