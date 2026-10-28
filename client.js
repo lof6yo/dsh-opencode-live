@@ -321,11 +321,99 @@ window.__ModuleLoader__.load({
         h('div', { style: { fontSize: 12, opacity: 0.6, lineHeight: 1.5 } }, t.autoOpenDesc));
     }
 
-    function Panel({ ctx }) {
+    function useScopedTrace(sessionId) {
+      const storeRef = React.useRef(null);
+      const [, bump] = React.useReducer((n) => n + 1, 0);
+      const key = sessionId ?? '';
+      if (storeRef.current === null || storeRef.current.key !== key) {
+        storeRef.current = { key, runs: new Map(), order: [], connected: false };
+      }
+      React.useEffect(() => {
+        if (sessionId === undefined) return undefined;
+        const store = storeRef.current;
+        let frame = 0;
+        let closed = false;
+        const schedule = () => {
+          if (frame !== 0) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            bump();
+          });
+        };
+        const upsert = (run) => {
+          if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
+          if (!store.runs.has(run.id)) store.order.unshift(run.id);
+          const previous = store.runs.get(run.id);
+          store.runs.set(run.id, {
+            ...previous,
+            ...run,
+            events: Array.isArray(run.events) ? run.events : (previous?.events ?? []),
+          });
+        };
+        const query = `?sessionId=${encodeURIComponent(sessionId)}`;
+        fetch(`${BASE}/state${query}`)
+          .then((response) => response.json())
+          .then((body) => {
+            if (closed) return;
+            store.runs.clear();
+            store.order = [];
+            for (const run of body?.runs ?? []) upsert(run);
+            schedule();
+          })
+          .catch(() => {});
+        const source = new EventSource(`${BASE}/events${query}`);
+        source.onopen = () => {
+          store.connected = true;
+          schedule();
+        };
+        source.onerror = () => {
+          store.connected = false;
+          schedule();
+        };
+        source.onmessage = (message) => {
+          let payload;
+          try {
+            payload = JSON.parse(message.data);
+          } catch {
+            return;
+          }
+          if (payload.type === 'snapshot') {
+            store.runs.clear();
+            store.order = [];
+            for (const run of payload.runs ?? []) upsert(run);
+          } else if (payload.type === 'run') {
+            upsert(payload.run);
+          } else if (payload.type === 'event') {
+            const run = store.runs.get(payload.runId);
+            if (run !== undefined) {
+              run.events.push(payload.event);
+              if (payload.mode !== undefined) run.mode = payload.mode;
+              if (payload.model !== undefined) run.model = payload.model;
+            }
+          } else if (payload.type === 'finish') {
+            const run = store.runs.get(payload.runId);
+            if (run !== undefined) {
+              run.status = payload.status;
+              run.stopReason = payload.stopReason;
+              run.finishedAt = payload.finishedAt;
+            }
+          }
+          schedule();
+        };
+        return () => {
+          closed = true;
+          source.close();
+          if (frame !== 0) cancelAnimationFrame(frame);
+        };
+      }, [sessionId]);
+      return sessionId === undefined ? feed : storeRef.current;
+    }
+
+    function Panel({ ctx, sessionId }) {
       const t = dict(ctx);
-      const trace = useTrace();
+      const trace = useScopedTrace(sessionId);
       return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 10 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 6, marginBottom: 10 } },
           h('span', {
             style: {
               width: 6,
@@ -389,7 +477,7 @@ window.__ModuleLoader__.load({
             scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
               name: 'sidebar.right.pane.tab',
               key: 'dsh-opencode-live',
-            }, () => h(Panel, { ctx }))));
+            }, (props) => h(Panel, { ctx, sessionId: props?.sessionId }))));
           } catch (error) {
             console.error('[dsh-opencode-live] right sidebar registration failed', error);
           }
@@ -409,6 +497,8 @@ window.__ModuleLoader__.load({
             try {
               const layout = typeof ctx.get === 'function' ? ctx.get('layout') : undefined;
               const right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined;
+              const mounted = typeof right?.mounted?.getSnapshot === 'function' ? right.mounted.getSnapshot() : undefined;
+              if (typeof mounted === 'string' && typeof payload.sessionId === 'string' && payload.sessionId !== mounted) return;
               layout?.openRightbar?.(true, false);
               right?.openTab?.('opencode-live');
             } catch (error) {

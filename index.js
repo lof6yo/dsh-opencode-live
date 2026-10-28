@@ -60,18 +60,19 @@ function normalizeConfig(config) {
 
 function createHandler(config, hub) {
   return (req, res) => {
-    let pathname;
+    let url;
     try {
-      pathname = new URL(req.url ?? '/', 'http://localhost').pathname;
+      url = new URL(req.url ?? '/', 'http://localhost');
     } catch {
       res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('bad request');
       return;
     }
-    const path = pathname.replace(/\/+$/, '') || '/';
+    const path = url.pathname.replace(/\/+$/, '') || '/';
+    const sessionId = url.searchParams.get('sessionId') ?? undefined;
     if (path === config.path) return serveInfo(res);
-    if (path === `${config.path}/state`) return serveState(res, hub);
-    if (path === `${config.path}/events`) return serveEvents(req, res, hub);
+    if (path === `${config.path}/state`) return serveState(res, hub, sessionId);
+    if (path === `${config.path}/events`) return serveEvents(req, res, hub, sessionId);
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
     res.end('not found');
   };
@@ -86,8 +87,8 @@ function serveInfo(res) {
   res.end(JSON.stringify({ ok: true, panel: 'native', state: 'state', events: 'events' }));
 }
 
-function serveState(res, hub) {
-  const body = JSON.stringify({ runs: hub.snapshot() });
+function serveState(res, hub, sessionId) {
+  const body = JSON.stringify({ runs: hub.snapshot(sessionId) });
   res.writeHead(200, {
     'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
@@ -95,7 +96,7 @@ function serveState(res, hub) {
   res.end(body);
 }
 
-function serveEvents(req, res, hub) {
+function serveEvents(req, res, hub, sessionId) {
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store, no-transform',
@@ -107,9 +108,9 @@ function serveEvents(req, res, hub) {
   const send = (payload) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
   };
-  send({ type: 'snapshot', runs: hub.snapshot() });
+  send({ type: 'snapshot', runs: hub.snapshot(sessionId) });
 
-  const unsubscribe = hub.subscribe(send);
+  const unsubscribe = hub.subscribe(send, sessionId);
   const heartbeat = setInterval(() => {
     res.write(': ping\n\n');
   }, 15000);
