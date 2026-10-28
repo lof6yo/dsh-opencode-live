@@ -258,32 +258,35 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
-        // This half must never break the Web boot: a missing right-Sidebar
-        // service or a rejected tab definition only disables the panel.
-        try {
-          const tabs = typeof ctx.get === 'function' ? ctx.get('sidebarRightTabs') : undefined;
-          if (tabs === undefined || tabs === null || typeof tabs.register !== 'function') return;
-          ctx.effect(() => tabs.register({
-            id: 'dsh-opencode-live',
-            kind: 'opencode-live',
-            priority: 'extension',
-            keepMounted: true,
-            title: () => 'OpenCode Live',
-            guide: [{
-              id: 'opencode-live',
-              order: 1,
+        // This half must never break the Web boot, and it must wait for the
+        // right-Sidebar services: at page boot our module may load before
+        // ui-sidebar-right has provided them.
+        ctx.inject(['sidebarRightTabs'], (scope) => {
+          try {
+            const tabs = scope.sidebarRightTabs;
+            if (tabs === null || tabs === undefined || typeof tabs.register !== 'function') return;
+            scope.effect(() => tabs.register({
+              id: 'dsh-opencode-live',
+              kind: 'opencode-live',
+              priority: 'extension',
+              keepMounted: true,
               title: () => 'OpenCode Live',
-              description: () => dict(ctx).guideDesc,
-              icon: Icon,
-            }],
-          }));
-          ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
-            name: 'sidebar.right.pane.tab',
-            key: 'dsh-opencode-live',
-          }, () => h(Panel, { ctx }))));
-        } catch (error) {
-          console.error('[dsh-opencode-live] right sidebar registration failed', error);
-        }
+              guide: [{
+                id: 'opencode-live',
+                order: 1,
+                title: () => 'OpenCode Live',
+                description: () => dict(ctx).guideDesc,
+                icon: Icon,
+              }],
+            }));
+            scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+              name: 'sidebar.right.pane.tab',
+              key: 'dsh-opencode-live',
+            }, () => h(Panel, { ctx }))));
+          } catch (error) {
+            console.error('[dsh-opencode-live] right sidebar registration failed', error);
+          }
+        });
       },
     };
   },
