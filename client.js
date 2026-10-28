@@ -15,7 +15,9 @@ window.__ModuleLoader__.load({
         done: '完成',
         tokens: 'tokens',
         starting: '启动中…',
-        autoOpen: '任务开始时自动打开',
+        autoOpen: '任务开始时自动展开右侧栏',
+        autoOpenDesc: '关闭后，OpenCode 任务只在面板里静默更新，不再把右侧栏弹出来。',
+        sectionTitle: 'OpenCode Live',
         guideDesc: '实时查看 OpenCode 的 agent、工具调用和它自己派生的子 agent。',
       },
       en: {
@@ -26,7 +28,9 @@ window.__ModuleLoader__.load({
         done: 'done',
         tokens: 'tokens',
         starting: 'starting…',
-        autoOpen: 'auto-open on task',
+        autoOpen: 'Expand the right sidebar when a task starts',
+        autoOpenDesc: 'Off: OpenCode runs still stream into the panel, but the panel no longer opens itself.',
+        sectionTitle: 'OpenCode Live',
         guideDesc: 'Live view of OpenCode\'s agent, tool calls, and the subagents it spawns.',
       },
     };
@@ -291,24 +295,39 @@ window.__ModuleLoader__.load({
             : run.events.map((event, index) => h(EventRow, { key: `${event.seq ?? index}`, event }))));
     }
 
+    function Section({ ctx }) {
+      const t = dict(ctx);
+      const [autoOpen, setAutoOpenState] = React.useState(() => autoOpenEnabled());
+      const row = {
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        fontSize: 13,
+        color: 'inherit',
+        cursor: 'pointer',
+      };
+      return h('div', { style: { display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 620, padding: '2px 0' } },
+        h('div', { style: { fontSize: 14, fontWeight: 650 } }, t.sectionTitle),
+        h('label', { style: row },
+          h('input', {
+            type: 'checkbox',
+            checked: autoOpen,
+            onChange: (event) => {
+              setAutoOpen(event.target.checked);
+              setAutoOpenState(event.target.checked);
+            },
+          }),
+          h('span', null, t.autoOpen)),
+        h('div', { style: { fontSize: 12, opacity: 0.6, lineHeight: 1.5 } }, t.autoOpenDesc));
+    }
+
     function Panel({ ctx }) {
       const t = dict(ctx);
       const trace = useTrace();
-      const [autoOpen, setAutoOpenState] = React.useState(() => autoOpenEnabled());
       return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 } },
           h('span', { style: { fontWeight: 650 } }, 'OpenCode Live'),
-          h('span', { style: { fontSize: 12, opacity: 0.6 } }, trace.connected ? t.live : t.offline),
-          h('label', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, opacity: 0.75 } },
-            h('input', {
-              type: 'checkbox',
-              checked: autoOpen,
-              onChange: (event) => {
-                setAutoOpen(event.target.checked);
-                setAutoOpenState(event.target.checked);
-              },
-            }),
-            t.autoOpen)),
+          h('span', { style: { fontSize: 12, opacity: 0.6 } }, trace.connected ? t.live : t.offline)),
         trace.order.length === 0
           ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.empty)
           : trace.order.map((id) => {
@@ -366,6 +385,13 @@ window.__ModuleLoader__.load({
             console.error('[dsh-opencode-live] right sidebar registration failed', error);
           }
         });
+
+        ctx.slots.inject('settings.section', () => ctx.slots.register({
+          name: 'settings.section',
+          id: 'opencode-live',
+          order: 30,
+          label: () => 'OpenCode Live',
+        }, () => h(Section, { ctx })));
 
         ctx.effect(() => {
           const unsubscribe = subscribeFeed((payload) => {
