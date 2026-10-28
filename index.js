@@ -20,23 +20,25 @@ export const inject = ['subagents', 'webServer'];
 
 /**
  * Install the provider and the panel route.
+ *
+ * Both registrations go through `ctx.effect` so Cordis owns their disposal:
+ * disabling or reloading this row must unregister the route before the next
+ * activation registers it again.
+ *
  * @param {import('@deepseek-ai/cordis').Context} ctx
  * @param {object} [config] loader row config
- * @returns {() => void} combined disposer
  */
 export function apply(ctx, config = {}) {
   const resolved = normalizeConfig(config);
   const hub = new TraceHub();
   const provider = new LiveProvider({ ctx, config: resolved, hub });
 
-  const disposers = [
-    ctx.subagents.registerProvider(provider),
-    ctx.webServer.register({
-      kind: 'prefix',
-      path: resolved.path,
-      handler: createHandler(resolved, hub),
-    }),
-  ];
+  ctx.effect(() => ctx.subagents.registerProvider(provider));
+  ctx.effect(() => ctx.webServer.register({
+    kind: 'prefix',
+    path: resolved.path,
+    handler: createHandler(resolved, hub),
+  }));
 
   try {
     const origin = ctx.webServer.getOrigin();
@@ -44,16 +46,6 @@ export function apply(ctx, config = {}) {
   } catch {
     // getOrigin throws before the listener binds; the route still works afterwards.
   }
-
-  return () => {
-    for (const dispose of disposers.reverse()) {
-      try {
-        dispose();
-      } catch {
-        // keep releasing the rest
-      }
-    }
-  };
 }
 
 function normalizeConfig(config) {

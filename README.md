@@ -3,8 +3,10 @@
 把 [OpenCode](https://opencode.ai) 当作 DSH 的子智能体来用，并把它**实际**使用的 agent、工具调用和它自己派生的子 agent（fixer、explorer…）实时显示在 DSH 的一个面板里。
 
 - **委派**：DSH 里的 `opencode` 工具，一次任务启动一个独立的 `opencode acp` 子进程；
-- **实时**：Host 端把 ACP 事件送到 `/opencode-live` 面板（SSE），浏览器打开即可看到直播；
+- **实时**：Host 端把 ACP 事件镜像成 trace，原生面板（Client 插件，`main` + 侧边栏图标）直接渲染，另有一个 SSE 页面 `/opencode-live` 作为兜底；
 - **不多加耦合**：OpenCode 用它自己的配置、模型和认证，DSH 只传 cwd + 任务文本。
+
+装好并重启后，侧边栏会出现一个 **OpenCode Live** 图标（终端样式），点开就是实时面板，与 DSH 同主题、不经过 iframe。
 
 ## 面板里能看到什么
 
@@ -26,6 +28,9 @@
 `maxDepth: provider-managed`）。
 
 没有运行时依赖：ACP 客户端只用 Node 内置模块，所以可以直接以目录方式安装（link）。
+
+bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**（新的 Client 模块在启动时扫描），
+之后每次委派都会出现在面板里。卸载/禁用时 Host 侧通过 `ctx.effect` 释放路由与 provider。
 
 ## 配置
 
@@ -64,15 +69,16 @@
 
 ```
 index.js           插件入口：注册 provider + /opencode-live 路由（页面 / state / SSE）
+client.js          Client 模块：侧边栏图标 + main 面板（React，订阅 SSE）
 lib/provider.js    ACP 客户端与 subagent provider（无第三方依赖）
 lib/trace.js       运行记录与 SSE 扇出
-web/panel.html     面板（原生 JS，EventSource）
+web/panel.html     浏览器兜底页面（原生 JS，EventSource）
 ```
 
 ## 开发
 
 ```bash
-node --check index.js lib/provider.js lib/trace.js
+node --check index.js client.js lib/provider.js lib/trace.js
 ```
 
 `lib/provider.js` 不依赖 DSH，可以脱离宿主单独驱动一个 `opencode acp` 子进程做联调。
