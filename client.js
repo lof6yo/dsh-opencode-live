@@ -15,6 +15,10 @@ window.__ModuleLoader__.load({
         done: '完成',
         starting: '启动中…',
         autoOpen: '任务开始时自动展开右侧栏',
+        collapse: '收起',
+        expand: '展开',
+        scrollTop: '回到顶部',
+        scrollBottom: '回到底部',
         autoOpenDesc: '关闭后，OpenCode 任务只在面板里静默更新，不再把右侧栏弹出来。',
         sectionTitle: 'OpenCode Live',
         cfgTitle: '会话配置',
@@ -40,6 +44,10 @@ window.__ModuleLoader__.load({
         done: 'done',
         starting: 'starting…',
         autoOpen: 'Expand the right sidebar when a task starts',
+        collapse: 'Collapse',
+        expand: 'Expand',
+        scrollTop: 'Back to top',
+        scrollBottom: 'Jump to bottom',
         autoOpenDesc: 'Off: OpenCode runs still stream into the panel, but the panel no longer opens itself.',
         sectionTitle: 'OpenCode Live',
         cfgTitle: 'Session configuration',
@@ -267,38 +275,25 @@ window.__ModuleLoader__.load({
       }
     }
 
-    function RunCard({ run, t }) {
-      const status = run.status === 'running' ? t.running : (run.stopReason ?? run.status);
-      return h('div', {
-        style: {
-          border: '1px solid color-mix(in oklab, currentColor 14%, transparent)',
-          borderRadius: 10,
-          padding: '10px 12px',
-          marginBottom: 12,
-        },
-      },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 } },
-          h('span', {
-            style: {
-              width: 8,
-              height: 8,
-              borderRadius: '50%',
-              background: run.status === 'running'
-                ? 'var(--color-amber-500, #fbbf24)'
-                : run.status === 'error'
-                  ? 'var(--color-red-500, #f87171)'
-                  : 'var(--color-green-500, #34d399)',
-            },
-          }),
-          h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, opacity: 0.85 } }, run.cwd),
-          run.mode ? h('span', { style: { ...chip, color: 'var(--color-purple-500, #c4b5fd)' } }, run.mode) : null,
-          run.model ? h('span', { style: { ...chip, fontFamily: 'ui-monospace, monospace' } }, run.model) : null,
-          h('span', { style: { ...chip, opacity: 0.75 } }, status),
-          h('span', { style: { marginLeft: 'auto', fontSize: 11, opacity: 0.55 } }, clock(run.startedAt))),
-        h('div', null,
-          run.events.length === 0
-            ? h('div', { style: { fontSize: 12, opacity: 0.5 } }, t.starting)
-            : run.events.map((event, index) => h(EventRow, { key: `${event.seq ?? index}`, event }))));
+    class PanelBoundary extends React.Component {
+      constructor(props) {
+        super(props);
+        this.state = { error: null };
+      }
+      static getDerivedStateFromError(error) {
+        return { error };
+      }
+      componentDidCatch(error) {
+        console.error('[dsh-opencode-live] panel render failed', error);
+      }
+      render() {
+        if (this.state.error !== null) {
+          return h('pre', {
+            style: { padding: 12, whiteSpace: 'pre-wrap', color: 'var(--color-red-500, #f87171)', fontSize: 12 },
+          }, `OpenCode Live 渲染出错：\n${String(this.state.error?.stack ?? this.state.error)}`);
+        }
+        return this.props.children;
+      }
     }
 
     function Section({ ctx }) {
@@ -449,165 +444,120 @@ window.__ModuleLoader__.load({
                       : writable ? '' : t.cfgReadonly))));
     }
 
-    function useScopedTrace(sessionId) {
-      const storeRef = React.useRef(null);
-      const [, bump] = React.useReducer((n) => n + 1, 0);
-      const key = sessionId ?? '';
-      if (storeRef.current === null || storeRef.current.key !== key) {
-        storeRef.current = { key, runs: new Map(), order: [], connected: false };
-      }
-      React.useEffect(() => {
-        const store = storeRef.current;
-        let frame = 0;
-        let closed = false;
-        const schedule = () => {
-          if (frame !== 0) return;
-          frame = requestAnimationFrame(() => {
-            frame = 0;
-            bump();
-          });
-        };
-        if (sessionId === undefined) {
-          const unsubscribe = subscribeFeed(() => schedule());
-          return () => {
-            unsubscribe();
-            if (frame !== 0) cancelAnimationFrame(frame);
-          };
-        }
-        const upsert = (run) => {
-          if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
-          if (!store.runs.has(run.id)) store.order.unshift(run.id);
-          const previous = store.runs.get(run.id);
-          store.runs.set(run.id, {
-            ...previous,
-            ...run,
-            events: Array.isArray(run.events) ? run.events : (previous?.events ?? []),
-          });
-        };
-        const query = `?sessionId=${encodeURIComponent(sessionId)}`;
-        fetch(`${BASE}/state${query}`)
-          .then((response) => response.json())
-          .then((body) => {
-            if (closed) return;
-            store.runs.clear();
-            store.order = [];
-            for (const run of body?.runs ?? []) upsert(run);
-            schedule();
-          })
-          .catch(() => {});
-        const source = new EventSource(`${BASE}/events${query}`);
-        source.onopen = () => {
-          store.connected = true;
-          schedule();
-        };
-        source.onerror = () => {
-          store.connected = false;
-          schedule();
-        };
-        source.onmessage = (message) => {
-          let payload;
-          try {
-            payload = JSON.parse(message.data);
-          } catch {
-            return;
-          }
-          if (payload.type === 'snapshot') {
-            store.runs.clear();
-            store.order = [];
-            for (const run of payload.runs ?? []) upsert(run);
-          } else if (payload.type === 'run') {
-            upsert(payload.run);
-          } else if (payload.type === 'event') {
-            const run = store.runs.get(payload.runId);
-            if (run !== undefined) {
-              run.events.push(payload.event);
-              if (payload.mode !== undefined) run.mode = payload.mode;
-              if (payload.model !== undefined) run.model = payload.model;
+    function RunCard({ run, t }) {
+      const [open, setOpen] = React.useState(true);
+      const status = run.status === 'running' ? t.running : (run.stopReason ?? run.status);
+      const toggle = () => setOpen((value) => !value);
+      return h('div', {
+        style: {
+          border: '1px solid color-mix(in oklab, currentColor 14%, transparent)',
+          borderRadius: 10,
+          padding: '10px 12px',
+          marginBottom: 12,
+        },
+      },
+        h('div', {
+          role: 'button',
+          tabIndex: 0,
+          onClick: toggle,
+          onKeyDown: (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              toggle();
             }
-          } else if (payload.type === 'finish') {
-            const run = store.runs.get(payload.runId);
-            if (run !== undefined) {
-              run.status = payload.status;
-              run.stopReason = payload.stopReason;
-              run.finishedAt = payload.finishedAt;
-            }
-          }
-          schedule();
-        };
-        return () => {
-          closed = true;
-          source.close();
-          if (frame !== 0) cancelAnimationFrame(frame);
-        };
-      }, [sessionId]);
-      return sessionId === undefined ? feed : storeRef.current;
-    }
-
-    function resolveSessionId(ctx, prop) {
-      if (typeof prop === 'string' && prop.length > 0) return prop;
-      try {
-        const right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined;
-        const mounted = typeof right?.mounted?.getSnapshot === 'function' ? right.mounted.getSnapshot() : undefined;
-        if (typeof mounted === 'string' && mounted.length > 0) return mounted;
-      } catch {
-        // fall through to the global feed
-      }
-      return undefined;
-    }
-
-    class PanelBoundary extends React.Component {
-      constructor(props) {
-        super(props);
-        this.state = { error: null };
-      }
-      static getDerivedStateFromError(error) {
-        return { error };
-      }
-      componentDidCatch(error) {
-        console.error('[dsh-opencode-live] panel render failed', error);
-      }
-      render() {
-        if (this.state.error !== null) {
-          return h('pre', {
-            style: { padding: 12, whiteSpace: 'pre-wrap', color: 'var(--color-red-500, #f87171)', fontSize: 12 },
-          }, `OpenCode Live 渲染出错：\n${String(this.state.error?.stack ?? this.state.error)}`);
-        }
-        return this.props.children;
-      }
+          },
+          title: open ? t.collapse : t.expand,
+          style: {
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginBottom: open ? 8 : 0,
+            cursor: 'pointer',
+            userSelect: 'none',
+          },
+        },
+          h('span', { style: { width: 12, fontSize: 11, opacity: 0.55 } }, open ? '▾' : '▸'),
+          h('span', {
+            style: {
+              width: 8,
+              height: 8,
+              borderRadius: '50%',
+              background: run.status === 'running'
+                ? 'var(--color-amber-500, #fbbf24)'
+                : run.status === 'error'
+                  ? 'var(--color-red-500, #f87171)'
+                  : 'var(--color-green-500, #34d399)',
+            },
+          }),
+          h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, opacity: 0.85 } }, run.cwd),
+          run.mode ? h('span', { style: { ...chip, color: 'var(--color-purple-500, #c4b5fd)' } }, run.mode) : null,
+          run.model ? h('span', { style: { ...chip, fontFamily: 'ui-monospace, monospace' } }, run.model) : null,
+          h('span', { style: { ...chip, opacity: 0.75 } }, status),
+          h('span', { style: { marginLeft: 'auto', fontSize: 11, opacity: 0.55 } }, clock(run.startedAt))),
+        open
+          ? h('div', null,
+            run.events.length === 0
+              ? h('div', { style: { fontSize: 12, opacity: 0.5 } }, t.starting)
+              : run.events.map((event, index) => h(EventRow, { key: `${event.seq ?? index}`, event })))
+          : null);
     }
 
     function Panel({ ctx, sessionId: sessionIdProp }) {
       const t = dict(ctx);
       const sessionId = resolveSessionId(ctx, sessionIdProp);
       const trace = useScopedTrace(sessionId);
-      return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 } },
-          h('span', {
-            style: {
-              width: 6,
-              height: 6,
-              borderRadius: '50%',
-              background: trace.connected
-                ? 'var(--color-green-500, #34d399)'
-                : 'var(--color-amber-500, #fbbf24)',
-            },
-          }),
-          h('span', { style: { fontSize: 11, opacity: 0.55 } }, trace.connected ? t.live : t.offline),
-          h('span', {
-            style: {
-              marginLeft: 'auto',
-              fontSize: 10,
-              opacity: 0.45,
-              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
-            },
-          }, sessionId === undefined ? 'session ?' : sessionId)),
-        trace.order.length === 0
-          ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.empty)
-          : trace.order.map((id) => {
-            const run = trace.runs.get(id);
-            return run ? h(RunCard, { key: id, run, t }) : null;
-          }));
+      const scroller = React.useRef(null);
+      const jump = (edge) => {
+        const node = scroller.current;
+        if (node === null) return;
+        node.scrollTo({ top: edge === 'top' ? 0 : node.scrollHeight, behavior: 'smooth' });
+      };
+      const scrollButton = {
+        width: 26,
+        height: 26,
+        borderRadius: 13,
+        border: '1px solid color-mix(in oklab, currentColor 20%, transparent)',
+        background: 'color-mix(in oklab, currentColor 8%, transparent)',
+        color: 'inherit',
+        cursor: 'pointer',
+        fontSize: 12,
+        lineHeight: 1,
+        opacity: 0.7,
+      };
+      return h('div', { style: { position: 'relative', height: '100%' } },
+        h('div', { ref: scroller, style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
+          h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 } },
+            h('span', {
+              style: {
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: trace.connected
+                  ? 'var(--color-green-500, #34d399)'
+                  : 'var(--color-amber-500, #fbbf24)',
+              },
+            }),
+            h('span', { style: { fontSize: 11, opacity: 0.55 } }, trace.connected ? t.live : t.offline),
+            h('span', {
+              style: {
+                marginLeft: 'auto',
+                fontSize: 10,
+                opacity: 0.45,
+                fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+              },
+            }, sessionId === undefined ? 'session ?' : sessionId)),
+          trace.order.length === 0
+            ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.empty)
+            : trace.order.map((id) => {
+              const run = trace.runs.get(id);
+              return run ? h(RunCard, { key: id, run, t }) : null;
+            })),
+        h('div', { style: { position: 'absolute', right: 10, bottom: 10, display: 'flex', gap: 6 } },
+          h('button', { type: 'button', title: t.scrollTop, style: scrollButton, onClick: () => jump('top') }, '↑'),
+          h('button', { type: 'button', title: t.scrollBottom, style: scrollButton, onClick: () => jump('bottom') }, '↓')));
     }
+
 
     function Icon({ size = 20 }) {
       return h('svg', {
