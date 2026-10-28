@@ -218,12 +218,19 @@ async function saveConfigRoute(req, res, ctx) {
     return;
   }
   const patch = {};
+  const clear = [];
   if (body !== null && typeof body === 'object') {
     for (const key of EDITABLE_KEYS) {
-      if (Object.hasOwn(body, key)) patch[key] = body[key];
+      if (!Object.hasOwn(body, key)) continue;
+      const value = body[key];
+      if ((key === 'model' || key === 'mode') && (value === '' || value === null)) {
+        clear.push(key);
+        continue;
+      }
+      patch[key] = value;
     }
   }
-  if (Object.keys(patch).length === 0) {
+  if (Object.keys(patch).length === 0 && clear.length === 0) {
     res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: false, error: 'nothing-to-save' }));
     return;
@@ -232,7 +239,11 @@ async function saveConfigRoute(req, res, ctx) {
   res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
   res.end(JSON.stringify({ ok: true, saved: patch }));
   void Promise.resolve()
-    .then(() => editor.edit(row.entry, (current) => ({ ...current, ...patch })))
+    .then(() => editor.edit(row.entry, (current) => {
+      const next = { ...current, ...patch };
+      for (const key of clear) delete next[key];
+      return next;
+    }))
     .catch((error) => {
       ctx.logger?.warn?.(`opencode-live: config save failed: ${error?.message ?? error}`);
     });
