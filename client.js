@@ -493,49 +493,42 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
-        // This half must never break the Web boot, and it must wait for the
-        // right-Sidebar services: at page boot our module may load before
-        // ui-sidebar-right has provided them.
-        ctx.inject(['sidebarRightTabs'], (scope) => {
-          const definition = {
-            id: 'dsh-opencode-live',
-            kind: 'opencode-live',
-            priority: 'extension',
-            keepMounted: true,
+        const definition = {
+          id: 'dsh-opencode-live',
+          kind: 'opencode-live',
+          priority: 'extension',
+          keepMounted: true,
+          title: () => 'OpenCode Live',
+          guide: [{
+            id: 'opencode-live',
+            order: 100,
             title: () => 'OpenCode Live',
-            guide: [{
-              id: 'opencode-live',
-              order: 100,
-              title: () => 'OpenCode Live',
-              description: () => dict(ctx).guideDesc,
-              icon: Icon,
-            }],
-          };
-          // A host-row reload can re-run apply() while the previous registration
-          // is still being disposed; a duplicate id then throws. Retry briefly so
-          // the tab type comes back without a page refresh.
-          const registerType = (attempt = 1) => {
-            try {
-              scope.effect(() => scope.sidebarRightTabs.register(definition));
-            } catch (error) {
-              console.error('[dsh-opencode-live] tab type registration failed', error);
-              if (attempt < 4) setTimeout(() => registerType(attempt + 1), 150);
-            }
-          };
-          const registerBody = (attempt = 1) => {
-            try {
-              scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
-                name: 'sidebar.right.pane.tab',
-                key: 'dsh-opencode-live',
-              }, (props) => h(Panel, { ctx, sessionId: props?.sessionId }))));
-            } catch (error) {
-              console.error('[dsh-opencode-live] tab body registration failed', error);
-              if (attempt < 4) setTimeout(() => registerBody(attempt + 1), 150);
-            }
-          };
-          registerType();
-          registerBody();
-        });
+            description: () => dict(ctx).guideDesc,
+            icon: Icon,
+          }],
+        };
+
+        // The right-Sidebar service may appear after this module applies, so
+        // poll briefly instead of nesting the registration in an inject fiber.
+        const registerType = () => {
+          const tabs = typeof ctx.get === 'function' ? ctx.get('sidebarRightTabs') : undefined;
+          if (tabs === null || tabs === undefined || typeof tabs.register !== 'function') return false;
+          ctx.effect(() => tabs.register(definition));
+          return true;
+        };
+        if (!registerType()) {
+          let attempts = 0;
+          const timer = setInterval(() => {
+            attempts += 1;
+            if (registerType() || attempts > 200) clearInterval(timer);
+          }, 100);
+          ctx.effect(() => () => clearInterval(timer));
+        }
+
+        ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+          name: 'sidebar.right.pane.tab',
+          key: 'dsh-opencode-live',
+        }, (props) => h(Panel, { ctx, sessionId: props?.sessionId })));
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
