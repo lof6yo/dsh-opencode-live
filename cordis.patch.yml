@@ -1,0 +1,19 @@
+# OpenCode Live: the `opencode` subagent tool plus a live trace panel served by
+# the DSH Web host at the configured `path` (default /opencode-live).
+- insert:
+    - id: opencode-live
+      name: dsh-opencode-live
+      config:
+        # Omit `command` to use $OPENCODE_BIN, ~/.opencode/bin/opencode, or PATH.
+        args: ['acp']
+        # `allow` answers OpenCode's own permission prompts for edits and shell
+        # commands; OpenCode's explicit `deny` rules still apply. Use `reject`
+        # for a read-only child.
+        permission: allow
+
+    - id: tool-opencode-live
+      name: '@deepseek-ai/dsh-tool-subagent'
+      config:
+        provider: opencode-live
+        toolName: opencode
+        maxDepth: provider-managed

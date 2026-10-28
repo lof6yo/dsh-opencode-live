@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "OpenCode Live",
+    "description": "Delegates to OpenCode over ACP and streams its agent, tool calls, and self-spawned subagents to a live panel."
+  }
+}

@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OpenCode Live</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0d12;
+    --panel: #12151c;
+    --line: #232936;
+    --text: #e6e8ee;
+    --dim: #8a92a3;
+    --accent: #7dd3fc;
+    --green: #34d399;
+    --amber: #fbbf24;
+    --red: #f87171;
+    --violet: #c4b5fd;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .top {
+    position: sticky; top: 0; z-index: 2;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 10px 14px;
+    background: rgba(11, 13, 18, .92);
+    border-bottom: 1px solid var(--line);
+    backdrop-filter: blur(6px);
+  }
+  .brand { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .brand h1 { font-size: 14px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  .brand .sub { color: var(--dim); font-size: 12px; }
+  .logo {
+    color: var(--accent); font-family: ui-monospace, monospace; font-weight: 700;
+    border: 1px solid var(--line); border-radius: 6px; padding: 1px 6px;
+  }
+  .conn { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; white-space: nowrap; }
+  .conn .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--amber); }
+  .conn.live .dot { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .conn.dead .dot { background: var(--red); }
+  main { padding: 12px 14px 40px; display: flex; flex-direction: column; gap: 12px; }
+  .empty { color: var(--dim); text-align: center; padding: 48px 12px; }
+  .empty code { color: var(--accent); }
+  .run {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    overflow: hidden;
+  }
+  .run > header {
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 8px 10px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(180deg, rgba(255,255,255,.02), transparent);
+  }
+  .run .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: none; }
+  .run.finished .dot { background: var(--green); }
+  .run.error .dot { background: var(--red); }
+  .cwd { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 45%; }
+  .chip { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
+  .chip.agent { color: var(--violet); border-color: color-mix(in oklab, var(--violet) 40%, transparent); }
+  .chip.model { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 35%, transparent); font-family: ui-monospace, monospace; }
+  .chip.status { color: var(--text); }
+  .time { margin-left: auto; color: var(--dim); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .events { list-style: none; margin: 0; padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 3px; }
+  .events li { font-family: ui-monospace, monospace; font-size: 12px; color: var(--text); word-break: break-word; }
+  .events .thought { color: var(--dim); font-style: italic; border-left: 2px solid var(--line); padding-left: 8px; }
+  .events .tool { color: var(--amber); }
+  .events .child { color: var(--green); }
+  .events .child.done { opacity: .65; }
+  .events .childtool { color: color-mix(in oklab, var(--green) 65%, var(--dim)); padding-left: 14px; }
+  .events .childtext { color: var(--dim); padding-left: 14px; }
+  .events .config { color: var(--violet); }
+  .events .perm { color: var(--dim); }
+  .events .usage { color: var(--accent); }
+  .events .status { color: var(--dim); }
+  .events .done { color: var(--green); }
+  .events .err { color: var(--red); }
+  .events .st { color: var(--dim); font-size: 11px; }
+  .agentbadge { color: var(--violet); border: 1px solid color-mix(in oklab, var(--violet) 40%, transparent); border-radius: 4px; padding: 0 4px; font-size: 11px; }
+  .out { margin-top: 4px; color: var(--dim); white-space: pre-wrap; border-left: 2px solid var(--line); padding-left: 8px; }
+  footer { color: var(--dim); font-size: 11px; text-align: center; padding: 6px; }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="logo">&gt;_</span><h1>OpenCode Live</h1><span class="sub">ACP trace</span></div>
+  <div class="conn" id="conn"><span class="dot"></span><span id="conn-text">connecting…</span></div>
+</header>
+<main id="runs"><div class="empty">等待委派… 在 DSH 里调用 <code>opencode</code> 工具后，这里会实时出现它的 agent、工具和子 agent。</div></main>
+<script>
+const runsEl = document.getElementById('runs');
+const connEl = document.getElementById('conn');
+const connText = document.getElementById('conn-text');
+const state = new Map();
+let order = [];
+let scheduled = false;
+
+function esc(value) {
+  return String(value ?? '').replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+}
+function trim(text, max) {
+  const value = String(text ?? '');
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+function clock(at) {
+  const date = new Date(at ?? Date.now());
+  return date.toLocaleTimeString([], { hour12: false });
+}
+function schedule() {
+  if (scheduled) return;
+  scheduled = true;
+  requestAnimationFrame(() => { scheduled = false; render(); });
+}
+
+function upsert(run) {
+  if (run == null || typeof run.id !== 'string') return;
+  const previous = state.get(run.id);
+  if (previous === undefined) order.unshift(run.id);
+  state.set(run.id, { ...previous, ...run, events: Array.isArray(run.events) ? run.events : (previous?.events ?? []) });
+}
+
+function row(event) {
+  const status = event.status ? ` <span class="st">${esc(event.status)}</span>` : '';
+  switch (event.kind) {
+    case 'config':
+      return `<li class="config">agent ${esc(event.mode ?? '?')} · model ${esc(event.model ?? '?')}</li>`;
+    case 'session':
+      return `<li class="config">OpenCode ${esc(event.version ?? '')}${event.agent ? ` · ${esc(event.agent)}` : ''}</li>`;
+    case 'thought':
+      return `<li class="thought">“${esc(trim(event.text, 320))}”</li>`;
+    case 'tool':
+      return `<li class="tool">⚙ ${esc(event.title ?? event.toolKind ?? 'tool')}${event.agent ? ` <span class="agentbadge">${esc(event.agent)}</span>` : ''}${status}</li>`;
+    case 'child':
+      return `<li class="child ${esc(event.status)}">↳ ${esc(event.title ?? 'child session')}${status}</li>`;
+    case 'child_tool':
+      return `<li class="childtool">↳ ⚙ ${esc(event.title ?? event.toolKind ?? 'tool')}${status}</li>`;
+    case 'child_text':
+      return `<li class="childtext">↳ ${esc(trim(event.text, 220))}</li>`;
+    case 'permission':
+      return `<li class="perm">permission · ${esc(event.tool ?? '')} → ${esc(event.option ?? event.decision ?? '')}</li>`;
+    case 'usage':
+      return `<li class="usage">tokens ${esc(event.used)}/${esc(event.size)}${event.cost ? ` · $${esc(event.cost.amount)}` : ''}</li>`;
+    case 'status':
+      return `<li class="status">… ${esc(event.status)}</li>`;
+    case 'done':
+      return `<li class="done">done · ${esc(event.stopReason)}${event.output ? `<div class="out">${esc(trim(event.output, 800))}</div>` : ''}</li>`;
+    case 'error':
+      return `<li class="err">error · ${esc(event.stage ?? '')}${event.category ? ` · ${esc(event.category)}` : ''}</li>`;
+    default:
+      return '';
+  }
+}
+
+function card(run) {
+  const rows = run.events.map(row).filter(Boolean).join('');
+  const status = run.status === 'running' ? 'running' : (run.stopReason ?? run.status);
+  return `<article class="run ${esc(run.status)}">
+    <header>
+      <span class="dot"></span>
+      <span class="cwd" title="${esc(run.cwd)}">${esc(run.cwd)}</span>
+      ${run.mode ? `<span class="chip agent">${esc(run.mode)}</span>` : ''}
+      ${run.model ? `<span class="chip model">${esc(run.model)}</span>` : ''}
+      <span class="chip status">${esc(status)}</span>
+      <span class="time">${esc(clock(run.startedAt))}</span>
+    </header>
+    <ul class="events">${rows || '<li class="status">starting…</li>'}</ul>
+  </article>`;
+}
+
+function render() {
+  if (order.length === 0) {
+    runsEl.innerHTML = '<div class="empty">等待委派… 在 DSH 里调用 <code>opencode</code> 工具后，这里会实时出现它的 agent、工具和子 agent。</div>';
+    return;
+  }
+  runsEl.innerHTML = order.map((id) => card(state.get(id))).filter(Boolean).join('');
+}
+
+function connect() {
+  const base = location.pathname.replace(/\/+$/, '');
+  const source = new EventSource(`${base}/events`);
+  source.onopen = () => {
+    connEl.className = 'conn live';
+    connText.textContent = 'live';
+  };
+  source.onerror = () => {
+    connEl.className = 'conn dead';
+    connText.textContent = 'reconnecting…';
+  };
+  source.onmessage = (message) => {
+    let payload;
+    try { payload = JSON.parse(message.data); } catch { return; }
+    if (payload.type === 'snapshot') {
+      state.clear();
+      order = [];
+      for (const run of payload.runs ?? []) upsert(run);
+    } else if (payload.type === 'run') {
+      upsert(payload.run);
+    } else if (payload.type === 'event') {
+      const run = state.get(payload.runId);
+      if (run === undefined) return;
+      run.events.push(payload.event);
+      if (payload.mode !== undefined) run.mode = payload.mode;
+      if (payload.model !== undefined) run.model = payload.model;
+    } else if (payload.type === 'finish') {
+      const run = state.get(payload.runId);
+      if (run === undefined) return;
+      run.status = payload.status;
+      run.stopReason = payload.stopReason;
+      run.finishedAt = payload.finishedAt;
+    }
+    schedule();
+  };
+}
+
+render();
+connect();
+</script>
+<footer>read-only · fed by the Host over SSE</footer>
+</body>
+</html>

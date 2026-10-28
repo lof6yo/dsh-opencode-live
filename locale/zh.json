@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "OpenCode 实时子智能体",
+    "description": "通过 ACP 把任务委派给 OpenCode，并把它实际使用的 agent、工具调用和自建子 agent 实时显示在面板里。"
+  }
+}
