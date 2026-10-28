@@ -15,6 +15,7 @@ window.__ModuleLoader__.load({
         done: '完成',
         tokens: 'tokens',
         starting: '启动中…',
+        autoOpen: '任务开始时自动打开',
         guideDesc: '实时查看 OpenCode 的 agent、工具调用和它自己派生的子 agent。',
       },
       en: {
@@ -25,6 +26,7 @@ window.__ModuleLoader__.load({
         done: 'done',
         tokens: 'tokens',
         starting: 'starting…',
+        autoOpen: 'auto-open on task',
         guideDesc: 'Live view of OpenCode\'s agent, tool calls, and the subagents it spawns.',
       },
     };
@@ -52,85 +54,151 @@ window.__ModuleLoader__.load({
       return text.length > max ? `${text.slice(0, max)}…` : text;
     }
 
+    const AUTO_KEY = 'dsh-opencode-live:auto-open';
+
+    function autoOpenEnabled() {
+      try {
+        return localStorage.getItem(AUTO_KEY) !== '0';
+      } catch {
+        return true;
+      }
+    }
+
+    function setAutoOpen(enabled) {
+      try {
+        localStorage.setItem(AUTO_KEY, enabled ? '1' : '0');
+      } catch {
+        // storage unavailable: the default stands
+      }
+    }
+
+    const feed = {
+      runs: new Map(),
+      order: [],
+      connected: false,
+      listeners: new Set(),
+      started: false,
+      source: null,
+    };
+
+    function upsertRun(run) {
+      if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
+      if (!feed.runs.has(run.id)) feed.order.unshift(run.id);
+      const previous = feed.runs.get(run.id);
+      feed.runs.set(run.id, {
+        ...previous,
+        ...run,
+        events: Array.isArray(run.events) ? run.events : (previous?.events ?? []),
+      });
+    }
+
+    function applyPayload(payload) {
+      if (payload === undefined) return;
+      if (payload.type === 'snapshot') {
+        feed.runs.clear();
+        feed.order = [];
+        for (const run of payload.runs ?? []) upsertRun(run);
+        return;
+      }
+      if (payload.type === 'run') {
+        upsertRun(payload.run);
+        return;
+      }
+      if (payload.type === 'event') {
+        const run = feed.runs.get(payload.runId);
+        if (run === undefined) return;
+        run.events.push(payload.event);
+        if (payload.mode !== undefined) run.mode = payload.mode;
+        if (payload.model !== undefined) run.model = payload.model;
+        return;
+      }
+      if (payload.type === 'finish') {
+        const run = feed.runs.get(payload.runId);
+        if (run === undefined) return;
+        run.status = payload.status;
+        run.stopReason = payload.stopReason;
+        run.finishedAt = payload.finishedAt;
+      }
+    }
+
+    function notify(payload) {
+      applyPayload(payload);
+      for (const listener of [...feed.listeners]) {
+        try {
+          listener(payload);
+        } catch {
+          // a broken subscriber never blocks the others
+        }
+      }
+    }
+
+    function ensureFeed() {
+      if (feed.started) return feed;
+      feed.started = true;
+      fetch(`${BASE}/state`)
+        .then((response) => response.json())
+        .then((body) => notify({ type: 'snapshot', runs: body?.runs ?? [] }))
+        .catch(() => {});
+      const source = new EventSource(`${BASE}/events`);
+      feed.source = source;
+      source.onopen = () => {
+        feed.connected = true;
+        notify();
+      };
+      source.onerror = () => {
+        feed.connected = false;
+        notify();
+      };
+      source.onmessage = (message) => {
+        let payload;
+        try {
+          payload = JSON.parse(message.data);
+        } catch {
+          return;
+        }
+        notify(payload);
+      };
+      return feed;
+    }
+
+    function subscribeFeed(listener) {
+      ensureFeed();
+      feed.listeners.add(listener);
+      return () => {
+        feed.listeners.delete(listener);
+      };
+    }
+
+    function closeFeed() {
+      if (feed.source !== null) {
+        try {
+          feed.source.close();
+        } catch {
+          // already closed
+        }
+        feed.source = null;
+      }
+      feed.started = false;
+    }
+
     function useTrace() {
-      const store = React.useRef({ runs: new Map(), order: [], connected: false, version: 0 });
       const [, bump] = React.useReducer((n) => n + 1, 0);
       React.useEffect(() => {
         let frame = 0;
-        let closed = false;
-        const schedule = () => {
+        const listener = () => {
           if (frame !== 0) return;
           frame = requestAnimationFrame(() => {
             frame = 0;
-            store.current.version += 1;
             bump();
           });
         };
-        const upsert = (run) => {
-          if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
-          const runs = store.current.runs;
-          if (!runs.has(run.id)) store.current.order.unshift(run.id);
-          const previous = runs.get(run.id);
-          runs.set(run.id, {
-            ...previous,
-            ...run,
-            events: Array.isArray(run.events) ? run.events : previous?.events ?? [],
-          });
-        };
-        fetch(`${BASE}/state`)
-          .then((response) => response.json())
-          .then((body) => {
-            if (closed) return;
-            store.current.runs.clear();
-            store.current.order = [];
-            for (const run of body?.runs ?? []) upsert(run);
-            schedule();
-          })
-          .catch(() => {});
-        const source = new EventSource(`${BASE}/events`);
-        source.onopen = () => {
-          store.current.connected = true;
-          schedule();
-        };
-        source.onerror = () => {
-          store.current.connected = false;
-          schedule();
-        };
-        source.onmessage = (message) => {
-          let payload;
-          try {
-            payload = JSON.parse(message.data);
-          } catch {
-            return;
-          }
-          if (payload.type === 'snapshot') {
-            store.current.runs.clear();
-            store.current.order = [];
-            for (const run of payload.runs ?? []) upsert(run);
-          } else if (payload.type === 'run') {
-            upsert(payload.run);
-          } else if (payload.type === 'event') {
-            const run = store.current.runs.get(payload.runId);
-            if (run === undefined) return;
-            run.events.push(payload.event);
-            if (payload.mode !== undefined) run.mode = payload.mode;
-            if (payload.model !== undefined) run.model = payload.model;
-          } else if (payload.type === 'finish') {
-            const run = store.current.runs.get(payload.runId);
-            if (run === undefined) return;
-            run.status = payload.status;
-            run.stopReason = payload.stopReason;
-            run.finishedAt = payload.finishedAt;
-          }
-          schedule();
-        };
+        const unsubscribe = subscribeFeed(listener);
         return () => {
-          closed = true;
+          unsubscribe();
           if (frame !== 0) cancelAnimationFrame(frame);
-          source.close();
         };
       }, []);
-      return store.current;
+      return feed;
     }
 
     const chip = {
@@ -226,10 +294,21 @@ window.__ModuleLoader__.load({
     function Panel({ ctx }) {
       const t = dict(ctx);
       const trace = useTrace();
+      const [autoOpen, setAutoOpenState] = React.useState(() => autoOpenEnabled());
       return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 } },
           h('span', { style: { fontWeight: 650 } }, 'OpenCode Live'),
-          h('span', { style: { fontSize: 12, opacity: 0.6 } }, trace.connected ? t.live : t.offline)),
+          h('span', { style: { fontSize: 12, opacity: 0.6 } }, trace.connected ? t.live : t.offline),
+          h('label', { style: { marginLeft: 'auto', display: 'flex', alignItems: 'center', gap: 6, fontSize: 11, opacity: 0.75 } },
+            h('input', {
+              type: 'checkbox',
+              checked: autoOpen,
+              onChange: (event) => {
+                setAutoOpen(event.target.checked);
+                setAutoOpenState(event.target.checked);
+              },
+            }),
+            t.autoOpen)),
         trace.order.length === 0
           ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.empty)
           : trace.order.map((id) => {
@@ -286,6 +365,25 @@ window.__ModuleLoader__.load({
           } catch (error) {
             console.error('[dsh-opencode-live] right sidebar registration failed', error);
           }
+        });
+
+        ctx.effect(() => {
+          const unsubscribe = subscribeFeed((payload) => {
+            if (payload === undefined || payload.type !== 'run') return;
+            if (!autoOpenEnabled()) return;
+            try {
+              const layout = typeof ctx.get === 'function' ? ctx.get('layout') : undefined;
+              const right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined;
+              layout?.openRightbar?.(true, false);
+              right?.openTab?.('opencode-live');
+            } catch (error) {
+              console.error('[dsh-opencode-live] auto-open failed', error);
+            }
+          });
+          return () => {
+            unsubscribe();
+            closeFeed();
+          };
         });
       },
     };
