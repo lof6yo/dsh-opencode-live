@@ -454,6 +454,100 @@ window.__ModuleLoader__.load({
                       : writable ? '' : t.cfgReadonly))));
     }
 
+    function useScopedTrace(sessionId) {
+      const storeRef = React.useRef(null);
+      const [, bump] = React.useReducer((n) => n + 1, 0);
+      const key = sessionId ?? '';
+      if (storeRef.current === null || storeRef.current.key !== key) {
+        storeRef.current = { key, runs: new Map(), order: [], connected: false };
+      }
+      React.useEffect(() => {
+        const store = storeRef.current;
+        let frame = 0;
+        let closed = false;
+        const schedule = () => {
+          if (frame !== 0) return;
+          frame = requestAnimationFrame(() => {
+            frame = 0;
+            bump();
+          });
+        };
+        if (sessionId === undefined) {
+          const unsubscribe = subscribeFeed(() => schedule());
+          return () => {
+            unsubscribe();
+            if (frame !== 0) cancelAnimationFrame(frame);
+          };
+        }
+        const upsert = (run) => {
+          if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
+          if (!store.runs.has(run.id)) store.order.unshift(run.id);
+          const previous = store.runs.get(run.id);
+          store.runs.set(run.id, {
+            ...previous,
+            ...run,
+            events: Array.isArray(run.events) ? run.events : (previous?.events ?? []),
+          });
+        };
+        const query = `?sessionId=${encodeURIComponent(sessionId)}`;
+        fetch(`${BASE}/state${query}`)
+          .then((response) => response.json())
+          .then((body) => {
+            if (closed) return;
+            store.runs.clear();
+            store.order = [];
+            for (const run of body?.runs ?? []) upsert(run);
+            schedule();
+          })
+          .catch(() => {});
+        const source = new EventSource(`${BASE}/events${query}`);
+        source.onopen = () => {
+          store.connected = true;
+          schedule();
+        };
+        source.onerror = () => {
+          store.connected = false;
+          schedule();
+        };
+        source.onmessage = (message) => {
+          let payload;
+          try {
+            payload = JSON.parse(message.data);
+          } catch {
+            return;
+          }
+          if (payload.type === 'snapshot') {
+            store.runs.clear();
+            store.order = [];
+            for (const run of payload.runs ?? []) upsert(run);
+          } else if (payload.type === 'run') {
+            upsert(payload.run);
+          } else if (payload.type === 'event') {
+            const run = store.runs.get(payload.runId);
+            if (run !== undefined) {
+              run.events.push(payload.event);
+              if (payload.mode !== undefined) run.mode = payload.mode;
+              if (payload.model !== undefined) run.model = payload.model;
+            }
+          } else if (payload.type === 'finish') {
+            const run = store.runs.get(payload.runId);
+            if (run !== undefined) {
+              run.status = payload.status;
+              run.stopReason = payload.stopReason;
+              run.finishedAt = payload.finishedAt;
+            }
+          }
+          schedule();
+        };
+        return () => {
+          closed = true;
+          source.close();
+          if (frame !== 0) cancelAnimationFrame(frame);
+        };
+      }, [sessionId]);
+      return sessionId === undefined ? feed : storeRef.current;
+    }
+
     function resolveSessionId(ctx, prop) {
       if (typeof prop === 'string' && prop.length > 0) return prop;
       try {
