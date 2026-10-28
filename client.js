@@ -141,6 +141,11 @@ window.__ModuleLoader__.load({
         upsertRun(payload.run);
         return;
       }
+      if (payload.type === 'removed') {
+        feed.runs.delete(payload.runId);
+        feed.order = feed.order.filter((id) => id !== payload.runId);
+        return;
+      }
       if (payload.type === 'event') {
         const run = feed.runs.get(payload.runId);
         if (run === undefined) return;
@@ -559,6 +564,9 @@ window.__ModuleLoader__.load({
             for (const run of payload.runs ?? []) upsert(run);
           } else if (payload.type === 'run') {
             upsert(payload.run);
+          } else if (payload.type === 'removed') {
+            store.runs.delete(payload.runId);
+            store.order = store.order.filter((id) => id !== payload.runId);
           } else if (payload.type === 'event') {
             const run = store.runs.get(payload.runId);
             if (run !== undefined) {

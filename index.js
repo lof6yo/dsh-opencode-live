@@ -160,7 +160,14 @@ function serveState(res, hub, sessionId) {
   res.end(body);
 }
 
+const MAX_SSE_SUBSCRIBERS = 20;
+
 function serveEvents(req, res, hub, sessionId) {
+  if (hub.subscriberCount >= MAX_SSE_SUBSCRIBERS) {
+    res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8' });
+    res.end('too many panel subscribers');
+    return;
+  }
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-store, no-transform',
@@ -169,9 +176,17 @@ function serveEvents(req, res, hub, sessionId) {
   });
   res.write(': opencode-live\n\n');
 
+  let saturated = false;
   const send = (payload) => {
-    res.write(`data: ${JSON.stringify(payload)}\n\n`);
+    // One slow browser must not grow the socket buffer without bound: while the
+    // stream is saturated, high-frequency event frames are dropped (the client
+    // re-syncs from the next snapshot).
+    if (saturated && payload !== undefined && payload.type === 'event') return;
+    if (!res.write(`data: ${JSON.stringify(payload)}\n\n`)) saturated = true;
   };
+  res.on('drain', () => {
+    saturated = false;
+  });
   send({ type: 'snapshot', runs: hub.snapshot(sessionId) });
 
   const unsubscribe = hub.subscribe(send, sessionId);
