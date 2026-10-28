@@ -1,6 +1,6 @@
 {
   "name": "dsh-opencode-live",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "private": true,
   "description": "OpenCode as a DSH subagent, with a native live trace panel for its agent, tools, and self-spawned subagents.",
   "type": "module",
@@ -37,5 +37,8 @@
         "@deepseek-ai/dsh-client-locale"
       ]
     }
+  },
+  "dependencies": {
+    "@deepseek-ai/schemastery": "~3.18.5"
   }
 }

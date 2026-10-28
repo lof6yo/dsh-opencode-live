@@ -27,7 +27,10 @@
 `cordis.patch.yml` 插入两行：provider（`opencode-live`）和工具（`opencode`，
 `maxDepth: provider-managed`）。
 
-没有运行时依赖：ACP 客户端只用 Node 内置模块，所以可以直接以目录方式安装（link）。
+ACP 客户端只用 Node 内置模块；唯一的外部依赖是 `@deepseek-ai/schemastery`（声明插件
+Config 用）。正常 npm 安装会自动装依赖；**以 link 方式安装时必须让它可解析**——在包目录
+执行一次 `pnpm install`，或把 profile 里的
+`node_modules/@deepseek-ai/schemastery` 软链到本包的 `node_modules/@deepseek-ai/`。
 
 bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**（新的 Client 模块在启动时扫描），
 之后每次委派都会出现在面板里。卸载/禁用时 Host 侧通过 `ctx.effect` 释放路由与 provider。
@@ -48,9 +51,10 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
     path: /opencode-live
     # 传给子进程的环境变量（在凭据清洗之后合并）
     env: {}
-    # ACP 会话的模型/agent：不填就用 OpenCode 的默认；填了会在 session/new 之后
-    # 用 session/set_config_option 钉住（ACP 不会继承 preset 里 agent 的 model）
-    model: opencode-go/deepseek-v4.1-flash
+    # 模型/agent 同样属于插件配置，可以在「设置 → 插件 → dsh-opencode-live」
+    # 的配置页里改（会写回 profile patch）。留空则用 OpenCode 的默认值：
+    # ACP 不会继承 preset 里 agent→model 的映射。
+    # model: opencode-go/deepseek-v4.1-flash
     # mode: orchestrator
 ```
 

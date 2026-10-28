@@ -11,11 +11,9 @@
         # for a read-only child.
         permission: allow
         # ACP starts the session on the provider's default model, not on the
-        # model the preset assigns to its default agent. Pin it here; OpenCode's
-        # own subagents still follow their per-agent model inside the child.
-        model: opencode-go/deepseek-v4.1-flash
-        # Optional: force the session agent (mode) too.
-        # mode: orchestrator
+        # model the preset assigns to its default agent. Set `model` here (or in
+        # the Plugins settings page) to pin it. Left unset in the bundle so a
+        # checkout carries no personal model; the profile layer holds the value.
 
     - id: tool-opencode-live
       name: '@deepseek-ai/dsh-tool-subagent'

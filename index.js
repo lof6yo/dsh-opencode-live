@@ -9,11 +9,28 @@
  * @module dsh-opencode-live
  */
 
+import z from '@deepseek-ai/schemastery';
 import { LiveProvider } from './lib/provider.js';
 import { TraceHub } from './lib/trace.js';
 
 export const name = 'opencode-live';
 export const inject = ['subagents', 'webServer'];
+
+/**
+ * Loader-row configuration. Declaring it gives the row a real schema, so the
+ * Plugins settings page renders an editor and persists changes through the
+ * profile patch layer instead of hand-edited YAML.
+ */
+export const Config = z.object({
+  command: z.string().description('OpenCode executable; omit to use $OPENCODE_BIN, ~/.opencode/bin/opencode, or PATH.'),
+  args: z.array(z.string()).default(['acp']).description('Arguments passed to the executable.'),
+  permission: z.union(['allow', 'reject']).default('allow')
+    .description('How to answer OpenCode ACP permission requests: allow (auto-approve) or reject (read-only).'),
+  env: z.dict(z.string()).default({}).description('Extra environment for the child, merged after credential scrubbing.'),
+  path: z.string().default('/opencode-live').description('Route that serves the panel data (state + SSE).'),
+  model: z.string().description('Pin the ACP session model, e.g. opencode-go/deepseek-v4.1-flash. Omit to keep the OpenCode default.'),
+  mode: z.string().description('Pin the ACP session agent (mode), e.g. orchestrator. Omit to keep the OpenCode default.'),
+});
 
 /**
  * Install the provider and the panel route.
