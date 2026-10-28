@@ -10,6 +10,12 @@
         # commands; OpenCode's explicit `deny` rules still apply. Use `reject`
         # for a read-only child.
         permission: allow
+        # ACP starts the session on the provider's default model, not on the
+        # model the preset assigns to its default agent. Pin it here; OpenCode's
+        # own subagents still follow their per-agent model inside the child.
+        model: opencode-go/deepseek-v4.1-flash
+        # Optional: force the session agent (mode) too.
+        # mode: orchestrator
 
     - id: tool-opencode-live
       name: '@deepseek-ai/dsh-tool-subagent'

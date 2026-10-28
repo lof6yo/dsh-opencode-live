@@ -249,6 +249,8 @@ window.__ModuleLoader__.load({
             `tokens ${event.used ?? '?'}/${event.size ?? '?'}${event.cost ? ` · $${event.cost.amount}` : ''}`);
         case 'status':
           return h('div', { style: { ...mono, opacity: 0.65 } }, `… ${event.status}`);
+        case 'note':
+          return h('div', { style: { ...mono, opacity: 0.5 } }, `· ${event.text ?? ''}`);
         case 'done':
           return h('div', { style: { ...mono, color: 'var(--color-green-500, #34d399)' } },
             `done · ${event.stopReason}`,

@@ -55,6 +55,8 @@ function normalizeConfig(config) {
     args: Array.isArray(config.args) ? config.args.map((value) => String(value)) : ['acp'],
     permission: config.permission === 'reject' ? 'reject' : 'allow',
     env: config.env !== null && typeof config.env === 'object' ? config.env : {},
+    mode: typeof config.mode === 'string' && config.mode.length > 0 ? config.mode : undefined,
+    model: typeof config.model === 'string' && config.model.length > 0 ? config.model : undefined,
   };
 }
 

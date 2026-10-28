@@ -48,6 +48,10 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
     path: /opencode-live
     # 传给子进程的环境变量（在凭据清洗之后合并）
     env: {}
+    # ACP 会话的模型/agent：不填就用 OpenCode 的默认；填了会在 session/new 之后
+    # 用 session/set_config_option 钉住（ACP 不会继承 preset 里 agent 的 model）
+    model: opencode-go/deepseek-v4.1-flash
+    # mode: orchestrator
 ```
 
 ## 安全边界
