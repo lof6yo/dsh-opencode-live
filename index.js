@@ -74,15 +74,17 @@ export function apply(ctx, config = {}) {
   try {
     const origin = ctx.webServer.getOrigin();
     ctx.logger.info(`opencode-live: trace panel at ${origin}${resolved.path}`);
-  } catch {
+  } catch (error) {
     // getOrigin throws before the listener binds; the route still works afterwards.
+    ctx.logger.debug?.(`opencode-live: panel origin unavailable: ${error?.message ?? error}`);
   }
 }
 
 function normalizeConfig(config) {
-  const path = typeof config.path === 'string' && config.path.startsWith('/')
+  const raw = typeof config.path === 'string' && config.path.startsWith('/')
     ? config.path.replace(/\/+$/, '')
-    : '/opencode-live';
+    : '';
+  const path = raw.length > 0 ? raw : '/opencode-live';
   return {
     path,
     command: typeof config.command === 'string' && config.command.length > 0 ? config.command : undefined,
@@ -293,8 +295,9 @@ async function saveConfigRoute(req, res, ctx) {
   try {
     body = await readJsonBody(req);
   } catch {
-    res.writeHead(400, { 'content-type': 'application/json; charset=utf-8' });
-    res.end(JSON.stringify({ ok: false, error: 'invalid-json' }));
+    const tooLarge = error?.code === 'TOO_LARGE';
+    res.writeHead(tooLarge ? 413 : 400, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: tooLarge ? 'body-too-large' : 'invalid-json' }));
     return;
   }
   const editor = editorOf(ctx);
@@ -332,17 +335,29 @@ async function saveConfigRoute(req, res, ctx) {
 function readJsonBody(req, limit = 64 * 1024) {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let tooLarge = false;
+    let finished = false;
     const chunks = [];
+    const fail = (error) => {
+      if (finished) return;
+      finished = true;
+      reject(error);
+    };
     req.on('data', (chunk) => {
+      if (tooLarge) return;
       size += chunk.length;
       if (size > limit) {
-        req.destroy();
-        reject(new Error('body too large'));
+        tooLarge = true;
+        const error = new Error('body too large');
+        error.code = 'TOO_LARGE';
+        fail(error);
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (finished) return;
+      finished = true;
       const text = Buffer.concat(chunks).toString('utf8');
       try {
         resolve(text.length === 0 ? {} : JSON.parse(text));
@@ -350,6 +365,7 @@ function readJsonBody(req, limit = 64 * 1024) {
         reject(error);
       }
     });
-    req.on('error', reject);
+    req.on('aborted', () => fail(new Error('request aborted')));
+    req.on('error', fail);
   });
 }

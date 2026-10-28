@@ -134,7 +134,8 @@ window.__ModuleLoader__.load({
       if (payload.type === 'snapshot') {
         feed.runs.clear();
         feed.order = [];
-        for (const run of payload.runs ?? []) upsertRun(run);
+        const runs = payload.runs ?? [];
+        for (let index = runs.length - 1; index >= 0; index -= 1) upsertRun(runs[index]);
         return;
       }
       if (payload.type === 'run') {
@@ -217,6 +218,10 @@ window.__ModuleLoader__.load({
         }
         feed.source = null;
       }
+      feed.listeners.clear();
+      feed.runs.clear();
+      feed.order = [];
+      feed.connected = false;
       feed.started = false;
     }
 
@@ -291,9 +296,24 @@ window.__ModuleLoader__.load({
       }
       render() {
         if (this.state.error !== null) {
-          return h('pre', {
-            style: { padding: 12, whiteSpace: 'pre-wrap', color: 'var(--color-red-500, #f87171)', fontSize: 12 },
-          }, `OpenCode Live 渲染出错：\n${String(this.state.error?.stack ?? this.state.error)}`);
+          return h('div', { style: { padding: 12, display: 'flex', flexDirection: 'column', gap: 8 } },
+            h('pre', {
+              style: { whiteSpace: 'pre-wrap', color: 'var(--color-red-500, #f87171)', fontSize: 12, margin: 0 },
+            }, `OpenCode Live 渲染出错：\n${String(this.state.error?.stack ?? this.state.error)}`),
+            h('button', {
+              type: 'button',
+              onClick: () => this.setState({ error: null }),
+              style: {
+                alignSelf: 'flex-start',
+                padding: '4px 10px',
+                borderRadius: 6,
+                border: '1px solid color-mix(in oklab, currentColor 25%, transparent)',
+                background: 'transparent',
+                color: 'inherit',
+                cursor: 'pointer',
+                fontSize: 12,
+              },
+            }, '重试'));
         }
         return this.props.children;
       }
@@ -304,13 +324,16 @@ window.__ModuleLoader__.load({
       const [autoOpen, setAutoOpenState] = React.useState(() => autoOpenEnabled());
       const [config, setConfig] = React.useState(null);
       const [status, setStatus] = React.useState('');
+      const baseline = React.useRef(null);
 
       React.useEffect(() => {
         let alive = true;
         fetch(`${BASE}/config`)
           .then((response) => response.json())
           .then((body) => {
-            if (alive) setConfig(body);
+            if (!alive) return;
+            baseline.current = { ...(body?.values ?? {}) };
+            setConfig(body);
           })
           .catch(() => {
             if (alive) setConfig({ writable: false, values: {} });
@@ -327,17 +350,20 @@ window.__ModuleLoader__.load({
         values: { ...(previous?.values ?? {}), [key]: value },
       }));
       const save = () => {
+        const base = baseline.current ?? {};
+        const changed = {};
+        for (const key of ['model', 'mode', 'permission', 'askFallback', 'askTimeoutMs']) {
+          if (JSON.stringify(values[key]) !== JSON.stringify(base[key])) changed[key] = values[key];
+        }
+        if (Object.keys(changed).length === 0) {
+          setStatus('saved');
+          return;
+        }
         setStatus('saving');
         fetch(`${BASE}/config`, {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({
-            model: values.model ?? '',
-            mode: values.mode ?? '',
-            permission: values.permission ?? 'ask',
-            askFallback: values.askFallback ?? 'reject',
-            askTimeoutMs: Number(values.askTimeoutMs ?? 600000),
-          }),
+          body: JSON.stringify(changed),
         })
           .then((response) => response.json())
           .then((body) => setStatus(body?.ok === true ? 'saved' : 'error'))
@@ -418,8 +444,12 @@ window.__ModuleLoader__.load({
                   type: 'number',
                   min: 0,
                   step: 1000,
+                  max: 2147483647,
                   value: values.askTimeoutMs ?? 600000,
-                  onChange: (event) => set('askTimeoutMs', Number(event.target.value)),
+                  onChange: (event) => {
+                    const next = Number(event.target.value);
+                    set('askTimeoutMs', Number.isFinite(next) ? Math.max(0, Math.min(next, 2147483647)) : 0);
+                  },
                 }))
               : null,
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
@@ -561,7 +591,8 @@ window.__ModuleLoader__.load({
           if (payload.type === 'snapshot') {
             store.runs.clear();
             store.order = [];
-            for (const run of payload.runs ?? []) upsert(run);
+            const runs = payload.runs ?? [];
+            for (let index = runs.length - 1; index >= 0; index -= 1) upsert(runs[index]);
           } else if (payload.type === 'run') {
             upsert(payload.run);
           } else if (payload.type === 'removed') {
@@ -719,12 +750,12 @@ window.__ModuleLoader__.load({
           }
         });
 
-        ctx.slots.inject('settings.section', () => ctx.slots.register({
+        ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'opencode-live',
           order: 21,
           label: () => 'OpenCode Live',
-        }, () => h(Section, { ctx })));
+        }, () => h(Section, { ctx }))));
 
         ctx.effect(() => {
           const unsubscribe = subscribeFeed((payload) => {
