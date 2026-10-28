@@ -329,7 +329,6 @@ window.__ModuleLoader__.load({
         storeRef.current = { key, runs: new Map(), order: [], connected: false };
       }
       React.useEffect(() => {
-        if (sessionId === undefined) return undefined;
         const store = storeRef.current;
         let frame = 0;
         let closed = false;
@@ -340,6 +339,13 @@ window.__ModuleLoader__.load({
             bump();
           });
         };
+        if (sessionId === undefined) {
+          const unsubscribe = subscribeFeed(() => schedule());
+          return () => {
+            unsubscribe();
+            if (frame !== 0) cancelAnimationFrame(frame);
+          };
+        }
         const upsert = (run) => {
           if (run === null || typeof run !== 'object' || typeof run.id !== 'string') return;
           if (!store.runs.has(run.id)) store.order.unshift(run.id);
@@ -413,7 +419,7 @@ window.__ModuleLoader__.load({
       const t = dict(ctx);
       const trace = useScopedTrace(sessionId);
       return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-start', gap: 6, marginBottom: 10 } },
+        h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 } },
           h('span', {
             style: {
               width: 6,
@@ -424,7 +430,15 @@ window.__ModuleLoader__.load({
                 : 'var(--color-amber-500, #fbbf24)',
             },
           }),
-          h('span', { style: { fontSize: 11, opacity: 0.55 } }, trace.connected ? t.live : t.offline)),
+          h('span', { style: { fontSize: 11, opacity: 0.55 } }, trace.connected ? t.live : t.offline),
+          h('span', {
+            style: {
+              marginLeft: 'auto',
+              fontSize: 10,
+              opacity: 0.45,
+              fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+            },
+          }, sessionId === undefined ? 'session ?' : sessionId)),
         trace.order.length === 0
           ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.empty)
           : trace.order.map((id) => {
@@ -451,7 +465,7 @@ window.__ModuleLoader__.load({
     }
 
     return {
-      inject: ['slots'],
+      inject: ['slots', 'locale'],
       apply(ctx) {
         // This half must never break the Web boot, and it must wait for the
         // right-Sidebar services: at page boot our module may load before
@@ -498,7 +512,7 @@ window.__ModuleLoader__.load({
               const layout = typeof ctx.get === 'function' ? ctx.get('layout') : undefined;
               const right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined;
               const mounted = typeof right?.mounted?.getSnapshot === 'function' ? right.mounted.getSnapshot() : undefined;
-              if (typeof mounted === 'string' && typeof payload.sessionId === 'string' && payload.sessionId !== mounted) return;
+              if (typeof mounted !== 'string' || typeof payload.sessionId !== 'string' || payload.sessionId !== mounted) return;
               layout?.openRightbar?.(true, false);
               right?.openTab?.('opencode-live');
             } catch (error) {
