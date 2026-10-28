@@ -325,9 +325,18 @@ window.__ModuleLoader__.load({
       const t = dict(ctx);
       const trace = useTrace();
       return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
-        h('div', { style: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 12 } },
-          h('span', { style: { fontWeight: 650 } }, 'OpenCode Live'),
-          h('span', { style: { fontSize: 12, opacity: 0.6 } }, trace.connected ? t.live : t.offline)),
+        h('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginBottom: 10 } },
+          h('span', {
+            style: {
+              width: 6,
+              height: 6,
+              borderRadius: '50%',
+              background: trace.connected
+                ? 'var(--color-green-500, #34d399)'
+                : 'var(--color-amber-500, #fbbf24)',
+            },
+          }),
+          h('span', { style: { fontSize: 11, opacity: 0.55 } }, trace.connected ? t.live : t.offline)),
         trace.order.length === 0
           ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.empty)
           : trace.order.map((id) => {
