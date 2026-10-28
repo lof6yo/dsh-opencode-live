@@ -258,26 +258,32 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots'],
       apply(ctx) {
-        const tabs = ctx.get?.('sidebarRightTabs') ?? ctx.sidebarRightTabs;
-        if (tabs === undefined || typeof tabs.register !== 'function') return;
-        ctx.effect(() => tabs.register({
-          id: 'dsh-opencode-live',
-          kind: 'opencode-live',
-          priority: 'extension',
-          keepMounted: true,
-          title: () => 'OpenCode Live',
-          guide: [{
-            id: 'opencode-live',
-            order: 40,
+        // This half must never break the Web boot: a missing right-Sidebar
+        // service or a rejected tab definition only disables the panel.
+        try {
+          const tabs = typeof ctx.get === 'function' ? ctx.get('sidebarRightTabs') : undefined;
+          if (tabs === undefined || tabs === null || typeof tabs.register !== 'function') return;
+          ctx.effect(() => tabs.register({
+            id: 'dsh-opencode-live',
+            kind: 'opencode-live',
+            priority: 'extension',
+            keepMounted: true,
             title: () => 'OpenCode Live',
-            description: () => dict(ctx).guideDesc,
-            icon: Icon,
-          }],
-        }));
-        ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
-          name: 'sidebar.right.pane.tab',
-          key: 'dsh-opencode-live',
-        }, () => h(Panel, { ctx }))));
+            guide: [{
+              id: 'opencode-live',
+              order: 40,
+              title: () => 'OpenCode Live',
+              description: () => dict(ctx).guideDesc,
+              icon: Icon,
+            }],
+          }));
+          ctx.effect(() => ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
+            name: 'sidebar.right.pane.tab',
+            key: 'dsh-opencode-live',
+          }, () => h(Panel, { ctx }))));
+        } catch (error) {
+          console.error('[dsh-opencode-live] right sidebar registration failed', error);
+        }
       },
     };
   },
