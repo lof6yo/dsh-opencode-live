@@ -441,8 +441,21 @@ window.__ModuleLoader__.load({
                       : writable ? '' : t.cfgReadonly))));
     }
 
-    function Panel({ ctx, sessionId }) {
+    function resolveSessionId(ctx, prop) {
+      if (typeof prop === 'string' && prop.length > 0) return prop;
+      try {
+        const right = typeof ctx.get === 'function' ? ctx.get('sidebarRight') : undefined;
+        const mounted = typeof right?.mounted?.getSnapshot === 'function' ? right.mounted.getSnapshot() : undefined;
+        if (typeof mounted === 'string' && mounted.length > 0) return mounted;
+      } catch {
+        // fall through to the global feed
+      }
+      return undefined;
+    }
+
+    function Panel({ ctx, sessionId: sessionIdProp }) {
       const t = dict(ctx);
+      const sessionId = resolveSessionId(ctx, sessionIdProp);
       const trace = useScopedTrace(sessionId);
       return h('div', { style: { height: '100%', overflow: 'auto', padding: '14px 16px' } },
         h('div', { style: { display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 } },
@@ -493,42 +506,34 @@ window.__ModuleLoader__.load({
     return {
       inject: ['slots', 'locale'],
       apply(ctx) {
-        const definition = {
-          id: 'dsh-opencode-live',
-          kind: 'opencode-live',
-          priority: 'extension',
-          keepMounted: true,
-          title: () => 'OpenCode Live',
-          guide: [{
-            id: 'opencode-live',
-            order: 100,
-            title: () => 'OpenCode Live',
-            description: () => dict(ctx).guideDesc,
-            icon: Icon,
-          }],
-        };
-
-        // The right-Sidebar service may appear after this module applies, so
-        // poll briefly instead of nesting the registration in an inject fiber.
-        const registerType = () => {
-          const tabs = typeof ctx.get === 'function' ? ctx.get('sidebarRightTabs') : undefined;
-          if (tabs === null || tabs === undefined || typeof tabs.register !== 'function') return false;
-          ctx.effect(() => tabs.register(definition));
-          return true;
-        };
-        if (!registerType()) {
-          let attempts = 0;
-          const timer = setInterval(() => {
-            attempts += 1;
-            if (registerType() || attempts > 200) clearInterval(timer);
-          }, 100);
-          ctx.effect(() => () => clearInterval(timer));
-        }
-
-        ctx.slots.inject('sidebar.right.pane.tab', () => ctx.slots.register({
-          name: 'sidebar.right.pane.tab',
-          key: 'dsh-opencode-live',
-        }, (props) => h(Panel, { ctx, sessionId: props?.sessionId })));
+        // Restored to the shape that demonstrably worked: one inject fiber owns
+        // both the tab type and its body, with no timers or retries inside.
+        ctx.inject(['sidebarRightTabs'], (scope) => {
+          try {
+            const tabs = scope.sidebarRightTabs;
+            if (tabs === null || tabs === undefined || typeof tabs.register !== 'function') return;
+            scope.effect(() => tabs.register({
+              id: 'dsh-opencode-live',
+              kind: 'opencode-live',
+              priority: 'extension',
+              keepMounted: true,
+              title: () => 'OpenCode Live',
+              guide: [{
+                id: 'opencode-live',
+                order: 100,
+                title: () => 'OpenCode Live',
+                description: () => dict(ctx).guideDesc,
+                icon: Icon,
+              }],
+            }));
+            scope.effect(() => scope.slots.inject('sidebar.right.pane.tab', () => scope.slots.register({
+              name: 'sidebar.right.pane.tab',
+              key: 'dsh-opencode-live',
+            }, (props) => h(Panel, { ctx, sessionId: props?.sessionId }))));
+          } catch (error) {
+            console.error('[dsh-opencode-live] right sidebar registration failed', error);
+          }
+        });
 
         ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
