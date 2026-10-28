@@ -44,9 +44,12 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
     # 省略时依次尝试 $OPENCODE_BIN、~/.opencode/bin/opencode、PATH
     command: opencode
     args: ['acp']
-    # allow = 自动同意 OpenCode 的改文件/执行命令请求；OpenCode 自己的 deny 规则仍然生效
+    # ask    = 把 OpenCode 的权限请求转成 DSH 审批，由你用界面决定（默认）
+    # allow  = 自动同意（OpenCode 自己的 deny 规则仍然生效）
     # reject = 只读子智能体
-    permission: allow
+    permission: ask
+    # ask 无法送达审批时的回退（会话没有打开的一轮 / 没有应答者）
+    askFallback: reject
     # 面板路径，默认 /opencode-live
     path: /opencode-live
     # 传给子进程的环境变量（在凭据清洗之后合并）
@@ -60,8 +63,10 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
 
 ## 安全边界
 
-- 子进程**不在 DSH 的文件沙箱和审批 UI 之下**；`permission: allow` 会让 OpenCode 按其自身
-  权限规则自动放行改动和命令。需要保守就改 `reject`。
+- 子进程**不在 DSH 的文件沙箱之下**。`permission: ask`（默认）把 OpenCode 的每次权限请求
+  转成一次 DSH 审批：批准只对那一次生效，拒绝/取消则回绝该请求。审批需要父会话处于打开的一轮
+  且装配了应答者，否则按 `askFallback`（默认 `reject`）fail-closed 处理，并在面板 trace 里记一条 note。
+  `allow` 会自动同意，`reject` 让子智能体只读。
 - 面板**没有鉴权**：任何能访问 DSH 监听地址的人都能读到这次运行的提示词片段、工具标题和模型名。
   它默认只挂在你自己 profile 的 Web 端口上；共享网络里跑时请用防火墙限制，或只监听 loopback。
 - 子进程的环境变量会过滤掉 `*_API_KEY`、`*_TOKEN`、`*SECRET*`、`*PASSWORD*` 这类名字；

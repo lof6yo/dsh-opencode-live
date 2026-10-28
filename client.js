@@ -23,6 +23,7 @@ window.__ModuleLoader__.load({
         cfgMode: '会话 agent（mode）',
         cfgModePlaceholder: '留空 = 用 OpenCode 默认 agent',
         cfgPermission: '权限策略（permission）',
+        cfgAskFallback: '审批不可用时的回退（askFallback）',
         cfgSave: '保存',
         cfgSaving: '保存中…',
         cfgSaved: '已保存；插件重载后生效',
@@ -46,6 +47,7 @@ window.__ModuleLoader__.load({
         cfgMode: 'Session agent (mode)',
         cfgModePlaceholder: 'empty = OpenCode default agent',
         cfgPermission: 'Permission policy',
+        cfgAskFallback: 'Fallback when approval is unavailable (askFallback)',
         cfgSave: 'Save',
         cfgSaving: 'Saving…',
         cfgSaved: 'Saved; applies after the plugin reloads',
@@ -332,7 +334,8 @@ window.__ModuleLoader__.load({
           body: JSON.stringify({
             model: values.model ?? '',
             mode: values.mode ?? '',
-            permission: values.permission ?? 'allow',
+            permission: values.permission ?? 'ask',
+            askFallback: values.askFallback ?? 'reject',
           }),
         })
           .then((response) => response.json())
@@ -389,11 +392,23 @@ window.__ModuleLoader__.load({
               h('span', null, t.cfgPermission),
               h('select', {
                 style: input,
-                value: values.permission ?? 'allow',
+                value: values.permission ?? 'ask',
                 onChange: (event) => set('permission', event.target.value),
               },
+                h('option', { value: 'ask' }, 'ask'),
                 h('option', { value: 'allow' }, 'allow'),
                 h('option', { value: 'reject' }, 'reject'))),
+            values.permission === 'ask' || values.permission === undefined
+              ? h('label', { style: field },
+                h('span', null, t.cfgAskFallback),
+                h('select', {
+                  style: input,
+                  value: values.askFallback ?? 'reject',
+                  onChange: (event) => set('askFallback', event.target.value),
+                },
+                  h('option', { value: 'reject' }, 'reject'),
+                  h('option', { value: 'allow' }, 'allow')))
+              : null,
             h('div', { style: { display: 'flex', alignItems: 'center', gap: 10 } },
               h('button', {
                 type: 'button',

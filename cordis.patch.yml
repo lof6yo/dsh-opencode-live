@@ -6,10 +6,13 @@
       config:
         # Omit `command` to use $OPENCODE_BIN, ~/.opencode/bin/opencode, or PATH.
         args: ['acp']
-        # `allow` answers OpenCode's own permission prompts for edits and shell
-        # commands; OpenCode's explicit `deny` rules still apply. Use `reject`
-        # for a read-only child.
-        permission: allow
+        # How OpenCode's own permission prompts are answered:
+        #   ask    – route each one to the DSH user (default)
+        #   allow  – auto-approve; OpenCode's explicit `deny` rules still apply
+        #   reject – read-only child
+        permission: ask
+        # Used when `ask` cannot reach an answerer (no open turn / none composed).
+        askFallback: reject
         # ACP starts the session on the provider's default model, not on the
         # model the preset assigns to its default agent. Set `model` here (or in
         # the Plugins settings page) to pin it. Left unset in the bundle so a
