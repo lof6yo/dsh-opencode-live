@@ -2,18 +2,15 @@
  * `opencode-live` bundle plugin.
  *
  * Registers one subagent provider (`opencode-live`, which drives `opencode acp`)
- * and one browser route (`/opencode-live`) that serves a live trace panel. The
- * panel is read-only and fed by server-sent events; the subagent result itself
- * stays a normal one-shot delegation.
+ * and the trace data route the native Client panel reads (`/opencode-live/state`
+ * snapshot, `/opencode-live/events` SSE). The browser renders the panel itself;
+ * this route carries data only.
  *
  * @module dsh-opencode-live
  */
 
-import { readFileSync } from 'node:fs';
 import { LiveProvider } from './lib/provider.js';
 import { TraceHub } from './lib/trace.js';
-
-const PANEL_HTML = readFileSync(new URL('./web/panel.html', import.meta.url), 'utf8');
 
 export const name = 'opencode-live';
 export const inject = ['subagents', 'webServer'];
@@ -72,7 +69,7 @@ function createHandler(config, hub) {
       return;
     }
     const path = pathname.replace(/\/+$/, '') || '/';
-    if (path === config.path) return servePanel(res);
+    if (path === config.path) return serveInfo(res);
     if (path === `${config.path}/state`) return serveState(res, hub);
     if (path === `${config.path}/events`) return serveEvents(req, res, hub);
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
@@ -80,12 +77,13 @@ function createHandler(config, hub) {
   };
 }
 
-function servePanel(res) {
+/** Base path: a small machine-readable statement, not the removed HTML page. */
+function serveInfo(res) {
   res.writeHead(200, {
-    'content-type': 'text/html; charset=utf-8',
+    'content-type': 'application/json; charset=utf-8',
     'cache-control': 'no-store',
   });
-  res.end(PANEL_HTML);
+  res.end(JSON.stringify({ ok: true, panel: 'native', state: 'state', events: 'events' }));
 }
 
 function serveState(res, hub) {

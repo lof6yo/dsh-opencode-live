@@ -3,7 +3,7 @@
 把 [OpenCode](https://opencode.ai) 当作 DSH 的子智能体来用，并把它**实际**使用的 agent、工具调用和它自己派生的子 agent（fixer、explorer…）实时显示在 DSH 的一个面板里。
 
 - **委派**：DSH 里的 `opencode` 工具，一次任务启动一个独立的 `opencode acp` 子进程；
-- **实时**：Host 端把 ACP 事件镜像成 trace，原生面板（Client 插件，`main` + 侧边栏图标）直接渲染，另有一个 SSE 页面 `/opencode-live` 作为兜底；
+- **实时**：Host 端把 ACP 事件镜像成 trace，原生面板（Client 插件，`main` + 侧边栏图标）直接渲染；数据走 `/opencode-live/state` + `/opencode-live/events`（SSE），不再提供 HTML 页面；
 - **不多加耦合**：OpenCode 用它自己的配置、模型和认证，DSH 只传 cwd + 任务文本。
 
 装好并重启后，侧边栏会出现一个 **OpenCode Live** 图标（终端样式），点开就是实时面板，与 DSH 同主题、不经过 iframe。
@@ -68,11 +68,10 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
 ## 结构
 
 ```
-index.js           插件入口：注册 provider + /opencode-live 路由（页面 / state / SSE）
+index.js           插件入口：注册 provider + /opencode-live 数据路由（state / SSE）
 client.js          Client 模块：侧边栏图标 + main 面板（React，订阅 SSE）
 lib/provider.js    ACP 客户端与 subagent provider（无第三方依赖）
 lib/trace.js       运行记录与 SSE 扇出
-web/panel.html     浏览器兜底页面（原生 JS，EventSource）
 ```
 
 ## 开发
