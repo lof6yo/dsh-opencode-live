@@ -40,6 +40,7 @@ window.__ModuleLoader__.load({
         allSessions: '所有 session',
         globalEmpty: '还没有任何 OpenCode 委派。在任意会话里调用 opencode 工具后，这里会按会话汇总。',
         unscoped: '未关联会话',
+        asking: '等待权限',
         filterAll: '全部',
         filterRunning: '运行中',
         filterError: '出错',
@@ -81,6 +82,7 @@ window.__ModuleLoader__.load({
         allSessions: 'all sessions',
         globalEmpty: 'No OpenCode delegations yet. Call the opencode tool in any session and runs aggregate here by session.',
         unscoped: 'Unscoped session',
+        asking: 'permission',
         filterAll: 'All',
         filterRunning: 'Running',
         filterError: 'Errors',
@@ -749,16 +751,19 @@ window.__ModuleLoader__.load({
         if (filter === 'done' && status === 'running') continue;
         const key = typeof run.sessionId === 'string' && run.sessionId.length > 0 ? run.sessionId : '__unscoped';
         if (!groups.has(key)) {
-          groups.set(key, { key, runs: [], running: 0, error: 0, lastAt: 0, cwd: run.cwd });
+          groups.set(key, { key, runs: [], running: 0, error: 0, asking: 0, lastAt: 0, cwd: run.cwd });
         }
         const group = groups.get(key);
         group.runs.push(run);
-        if (status === 'running') group.running += 1;
+        if (status === 'running') {
+          group.running += 1;
+          if (lastPermissionDecision(run) === 'asking') group.asking += 1;
+        }
         if (status === 'error') group.error += 1;
         const at = run.finishedAt ?? run.startedAt ?? 0;
         if (at > group.lastAt) group.lastAt = at;
       }
-      return [...groups.values()].sort((a, b) => (b.running - a.running) || (b.error - a.error) || (b.lastAt - a.lastAt));
+      return [...groups.values()].sort((a, b) => (b.asking - a.asking) || (b.running - a.running) || (b.error - a.error) || (b.lastAt - a.lastAt));
     }
 
     function shortSessionId(id) {
@@ -811,6 +816,25 @@ window.__ModuleLoader__.load({
       if (typeof useSessions === 'function') return h(GlobalWithSessions, { ctx, useSessions });
       if (sessionListOf(ctx) !== undefined) return h(GlobalWithStore, { ctx });
       return h(GlobalBody, { ctx, sessionsById: undefined });
+    }
+
+    function lastPermissionDecision(run) {
+      const events = run?.events;
+      if (!Array.isArray(events)) return undefined;
+      for (let index = events.length - 1; index >= 0; index -= 1) {
+        const event = events[index];
+        if (event !== null && typeof event === 'object' && event.kind === 'permission') {
+          return event.decision;
+        }
+      }
+      return undefined;
+    }
+
+    function groupDot(group) {
+      if (group.asking > 0) return 'var(--color-amber-500, #fbbf24)';
+      if (group.error > 0) return 'var(--color-red-500, #f87171)';
+      if (group.running > 0) return 'var(--color-green-500, #34d399)';
+      return 'color-mix(in oklab, currentColor 22%, transparent)';
     }
 
     function LiveIcon({ size = 16, active = false }) {
@@ -958,23 +982,29 @@ window.__ModuleLoader__.load({
                 },
                   h('span', { style: { width: 12, fontSize: 11, opacity: 0.55 } }, open ? '▾' : '▸'),
                   h('span', {
+                    title: group.asking > 0
+                      ? t.asking
+                      : group.error > 0
+                        ? t.filterError
+                        : group.running > 0
+                          ? t.running
+                          : t.filterDone,
                     style: {
                       width: 8,
                       height: 8,
                       borderRadius: '50%',
-                      background: group.running > 0
-                        ? 'var(--color-green-500, #34d399)'
-                        : group.error > 0
-                          ? 'var(--color-red-500, #f87171)'
-                          : 'color-mix(in oklab, currentColor 35%, transparent)',
+                      background: groupDot(group),
                     },
                   }),
                   h('span', { style: { fontSize: 12.5, fontWeight: 600 }, title: group.key }, title),
                   cwdName !== undefined
                     ? h('span', { style: { ...chip, opacity: 0.75, fontFamily: 'ui-monospace, monospace' } }, cwdName)
                     : null,
+                  group.asking > 0
+                    ? h('span', { style: { ...chip, color: 'var(--color-amber-500, #fbbf24)' } }, `${group.asking} ${t.asking}`)
+                    : null,
                   group.running > 0
-                    ? h('span', { style: { ...chip, color: 'var(--color-amber-500, #fbbf24)' } }, `${group.running} ${t.running}`)
+                    ? h('span', { style: { ...chip, color: 'var(--color-green-500, #34d399)' } }, `${group.running} ${t.running}`)
                     : null,
                   group.error > 0
                     ? h('span', { style: { ...chip, color: 'var(--color-red-500, #f87171)' } }, `${group.error} ${t.filterError}`)
