@@ -761,6 +761,58 @@ window.__ModuleLoader__.load({
       return [...groups.values()].sort((a, b) => (b.running - a.running) || (b.error - a.error) || (b.lastAt - a.lastAt));
     }
 
+    function shortSessionId(id) {
+      const raw = typeof id === 'string' ? id : '';
+      const body = raw.startsWith('session-') ? raw.slice('session-'.length) : raw;
+      const candidate = body.length > 0 ? body : raw;
+      return candidate.length > 0 ? candidate.slice(0, 8) : '?';
+    }
+
+    function sessionGroupTitle(byId, key, t) {
+      if (key === '__unscoped') return t.unscoped;
+      const title = byId?.[key]?.title;
+      if (typeof title === 'string' && title.trim().length > 0) return title.trim();
+      return `Session ${shortSessionId(key)}`;
+    }
+
+    function GlobalWithSessions({ ctx, useSessions }) {
+      const byId = useSessions((state) => state?.byId);
+      return h(GlobalBody, { ctx, sessionsById: byId });
+    }
+
+    function sessionListOf(ctx) {
+      try {
+        const sessions = typeof ctx.get === 'function' ? ctx.get('sessions') : undefined;
+        return sessions?.list;
+      } catch {
+        return undefined;
+      }
+    }
+
+    function GlobalWithStore({ ctx }) {
+      const list = sessionListOf(ctx);
+      const subscribe = React.useCallback((notify) => (
+        typeof list?.subscribe === 'function' ? list.subscribe(notify) : () => {}
+      ), [list]);
+      const read = React.useCallback(() => {
+        try {
+          return typeof list?.getSnapshot === 'function' ? list.getSnapshot() : undefined;
+        } catch {
+          return undefined;
+        }
+      }, [list]);
+      const state = typeof React.useSyncExternalStore === 'function'
+        ? React.useSyncExternalStore(subscribe, read, read)
+        : read();
+      return h(GlobalBody, { ctx, sessionsById: state?.byId });
+    }
+
+    function GlobalPanel({ ctx, useSessions }) {
+      if (typeof useSessions === 'function') return h(GlobalWithSessions, { ctx, useSessions });
+      if (sessionListOf(ctx) !== undefined) return h(GlobalWithStore, { ctx });
+      return h(GlobalBody, { ctx, sessionsById: undefined });
+    }
+
     function LiveIcon({ size = 16, active = false }) {
       return h('svg', {
         width: size,
@@ -786,7 +838,7 @@ window.__ModuleLoader__.load({
         }));
     }
 
-    function GlobalPanel({ ctx }) {
+    function GlobalBody({ ctx, sessionsById }) {
       const t = dict(ctx);
       const store = useScopedTrace(undefined);
       const [filter, setFilter] = React.useState('all');
@@ -877,7 +929,7 @@ window.__ModuleLoader__.load({
             ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.globalEmpty)
             : groups.map((group) => {
               const open = !collapsed.has(group.key);
-              const title = group.key === '__unscoped' ? t.unscoped : `Session ${group.key.slice(0, 8)}`;
+              const title = sessionGroupTitle(sessionsById, group.key, t);
               const cwdName = typeof group.cwd === 'string'
                 ? group.cwd.split('/').filter(Boolean).pop()
                 : undefined;
@@ -917,7 +969,7 @@ window.__ModuleLoader__.load({
                           : 'color-mix(in oklab, currentColor 35%, transparent)',
                     },
                   }),
-                  h('span', { style: { fontSize: 12.5, fontWeight: 600 } }, title),
+                  h('span', { style: { fontSize: 12.5, fontWeight: 600 }, title: group.key }, title),
                   cwdName !== undefined
                     ? h('span', { style: { ...chip, opacity: 0.75, fontFamily: 'ui-monospace, monospace' } }, cwdName)
                     : null,
@@ -992,7 +1044,7 @@ window.__ModuleLoader__.load({
             ctx.slots.inject('main', () => ctx.slots.register({
               name: 'main',
               key: 'opencode-live',
-            }, () => h(PanelBoundary, null, h(GlobalPanel, { ctx })))),
+            }, (props) => h(PanelBoundary, null, h(GlobalPanel, { ctx, useSessions: props?.useSessions })))),
             ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
               name: 'sidebar.panellist',
               id: 'opencode-live',
