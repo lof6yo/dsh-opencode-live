@@ -36,6 +36,18 @@ window.__ModuleLoader__.load({
         cfgError: '保存失败',
         cfgReadonly: '当前环境没有 config editor，无法保存',
         guideDesc: '实时查看 OpenCode 的 agent、工具调用和它自己派生的子 agent。',
+        globalTitle: 'OpenCode Live',
+        allSessions: '所有 session',
+        globalEmpty: '还没有任何 OpenCode 委派。在任意会话里调用 opencode 工具后，这里会按会话汇总。',
+        unscoped: '未关联会话',
+        filterAll: '全部',
+        filterRunning: '运行中',
+        filterError: '出错',
+        filterDone: '已完成',
+        backToChat: '返回对话',
+        refresh: '刷新',
+        runsUnit: '个 run',
+        rightHint: '右侧栏按会话显示；这里汇总所有会话。',
       },
       en: {
         empty: 'Waiting for a delegation. Call the opencode tool in DSH and its agent, tools, and subagents appear here live.',
@@ -65,6 +77,18 @@ window.__ModuleLoader__.load({
         cfgError: 'Save failed',
         cfgReadonly: 'No config editor here; cannot save',
         guideDesc: 'Live view of OpenCode\'s agent, tool calls, and the subagents it spawns.',
+        globalTitle: 'OpenCode Live',
+        allSessions: 'all sessions',
+        globalEmpty: 'No OpenCode delegations yet. Call the opencode tool in any session and runs aggregate here by session.',
+        unscoped: 'Unscoped session',
+        filterAll: 'All',
+        filterRunning: 'Running',
+        filterError: 'Errors',
+        filterDone: 'Done',
+        backToChat: 'Back to chat',
+        refresh: 'Refresh',
+        runsUnit: ' runs',
+        rightHint: 'The right sidebar is per session; this page aggregates every session.',
       },
     };
 
@@ -477,7 +501,7 @@ window.__ModuleLoader__.load({
                       : writable ? '' : t.cfgReadonly))));
     }
 
-    function RunCard({ run, t }) {
+    function RunCard({ run, t, showCwd = true }) {
       const [open, setOpen] = React.useState(true);
       const status = run.status === 'running' ? t.running : (run.stopReason ?? run.status);
       const toggle = () => setOpen((value) => !value);
@@ -523,7 +547,9 @@ window.__ModuleLoader__.load({
                   : 'var(--color-green-500, #34d399)',
             },
           }),
-          h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, opacity: 0.85 } }, run.cwd),
+          showCwd
+            ? h('span', { style: { fontFamily: 'ui-monospace, monospace', fontSize: 12, opacity: 0.85 } }, run.cwd)
+            : null,
           run.mode ? h('span', { style: { ...chip, color: 'var(--color-purple-500, #c4b5fd)' } }, run.mode) : null,
           run.model ? h('span', { style: { ...chip, fontFamily: 'ui-monospace, monospace' } }, run.model) : null,
           h('span', { style: { ...chip, opacity: 0.75 } }, status),
@@ -701,6 +727,215 @@ window.__ModuleLoader__.load({
     }
 
 
+    function ago(since, now) {
+      if (typeof since !== 'number' || !Number.isFinite(since)) return '';
+      const seconds = Math.max(0, Math.round((now - since) / 1000));
+      if (seconds < 60) return `${seconds}s`;
+      const minutes = Math.round(seconds / 60);
+      if (minutes < 60) return `${minutes}m`;
+      const hours = Math.round(minutes / 60);
+      if (hours < 24) return `${hours}h`;
+      return `${Math.round(hours / 24)}d`;
+    }
+
+    function groupRuns(store, filter) {
+      const groups = new Map();
+      for (const id of store.order) {
+        const run = store.runs.get(id);
+        if (run === undefined) continue;
+        const status = run.status ?? 'running';
+        if (filter === 'running' && status !== 'running') continue;
+        if (filter === 'error' && status !== 'error') continue;
+        if (filter === 'done' && status === 'running') continue;
+        const key = typeof run.sessionId === 'string' && run.sessionId.length > 0 ? run.sessionId : '__unscoped';
+        if (!groups.has(key)) {
+          groups.set(key, { key, runs: [], running: 0, error: 0, lastAt: 0, cwd: run.cwd });
+        }
+        const group = groups.get(key);
+        group.runs.push(run);
+        if (status === 'running') group.running += 1;
+        if (status === 'error') group.error += 1;
+        const at = run.finishedAt ?? run.startedAt ?? 0;
+        if (at > group.lastAt) group.lastAt = at;
+      }
+      return [...groups.values()].sort((a, b) => (b.running - a.running) || (b.error - a.error) || (b.lastAt - a.lastAt));
+    }
+
+    function LiveIcon({ size = 16, active = false }) {
+      return h('svg', {
+        width: size,
+        height: size,
+        viewBox: '0 0 24 24',
+        fill: 'none',
+        stroke: 'currentColor',
+        strokeWidth: 1.8,
+        strokeLinecap: 'round',
+        strokeLinejoin: 'round',
+        'aria-hidden': true,
+      },
+        h('rect', { x: 3, y: 4, width: 18, height: 16, rx: 4 }),
+        h('path', { d: 'M7 9l3 3-3 3' }),
+        h('path', { d: 'M13 15h4' }),
+        h('circle', {
+          cx: 19.5,
+          cy: 4.5,
+          r: 2.4,
+          fill: active ? 'var(--color-green-500, #34d399)' : 'currentColor',
+          stroke: 'none',
+          opacity: active ? 1 : 0.45,
+        }));
+    }
+
+    function GlobalPanel({ ctx }) {
+      const t = dict(ctx);
+      const store = useScopedTrace(undefined);
+      const [filter, setFilter] = React.useState('all');
+      const [collapsed, setCollapsed] = React.useState(() => new Set());
+      const [now, setNow] = React.useState(() => Date.now());
+      React.useEffect(() => {
+        const timer = setInterval(() => setNow(Date.now()), 10000);
+        timer.unref?.();
+        return () => clearInterval(timer);
+      }, []);
+      const groups = groupRuns(store, filter);
+      const totalRunning = groups.reduce((sum, group) => sum + group.running, 0);
+      const totalRuns = groups.reduce((sum, group) => sum + group.runs.length, 0);
+      const buttonStyle = {
+        padding: '3px 10px',
+        borderRadius: 999,
+        border: '1px solid color-mix(in oklab, currentColor 20%, transparent)',
+        background: 'transparent',
+        color: 'inherit',
+        cursor: 'pointer',
+        font: 'inherit',
+        fontSize: 11.5,
+        lineHeight: 1.5,
+      };
+      const activeButtonStyle = {
+        ...buttonStyle,
+        background: 'color-mix(in oklab, currentColor 14%, transparent)',
+        borderColor: 'color-mix(in oklab, currentColor 40%, transparent)',
+      };
+      const toggle = (key) => {
+        setCollapsed((previous) => {
+          const next = new Set(previous);
+          if (next.has(key)) next.delete(key);
+          else next.add(key);
+          return next;
+        });
+      };
+      const refresh = () => {
+        if (store.source !== null) {
+          try {
+            store.source.close();
+          } catch {
+            // already closed
+          }
+          store.source = null;
+          store.started = false;
+        }
+        ensureFeed();
+        setNow(Date.now());
+      };
+      const back = () => {
+        try {
+          ctx.get('layout')?.selectPanel?.(null);
+        } catch {
+          // layout not available in this context
+        }
+      };
+      const filterButton = (key, label) => h('button', {
+        type: 'button',
+        'aria-pressed': filter === key,
+        onClick: () => setFilter(key),
+        style: filter === key ? activeButtonStyle : buttonStyle,
+      }, label);
+      return h('div', { style: { height: '100%', overflow: 'auto' } },
+        h('div', { style: { maxWidth: 980, margin: '0 auto', padding: '22px 24px 48px' } },
+          h('div', { style: { display: 'flex', alignItems: 'baseline', gap: 10, flexWrap: 'wrap', marginBottom: 6 } },
+            h('h2', { style: { margin: 0, fontSize: 20, fontWeight: 650 } }, t.globalTitle),
+            h('span', {
+              style: {
+                ...chip,
+                color: store.connected
+                  ? 'var(--color-green-500, #34d399)'
+                  : 'var(--color-amber-500, #fbbf24)',
+              },
+            }, store.connected ? t.live : t.offline),
+            h('span', { style: { fontSize: 11, opacity: 0.6 } }, `${totalRunning} / ${totalRuns} ${t.runsUnit}`),
+            h('span', { style: { marginLeft: 'auto', fontSize: 11, opacity: 0.5 } }, t.allSessions)),
+          h('div', { style: { fontSize: 11, opacity: 0.5, marginBottom: 14 } }, t.rightHint),
+          h('div', { style: { display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginBottom: 16 } },
+            filterButton('all', t.filterAll),
+            filterButton('running', t.filterRunning),
+            filterButton('error', t.filterError),
+            filterButton('done', t.filterDone),
+            h('span', { style: { marginLeft: 'auto' } }),
+            h('button', { type: 'button', style: buttonStyle, onClick: refresh }, t.refresh),
+            h('button', { type: 'button', style: buttonStyle, onClick: back }, t.backToChat)),
+          groups.length === 0
+            ? h('div', { style: { opacity: 0.6, textAlign: 'center', padding: '48px 12px' } }, t.globalEmpty)
+            : groups.map((group) => {
+              const open = !collapsed.has(group.key);
+              const title = group.key === '__unscoped' ? t.unscoped : `Session ${group.key.slice(0, 8)}`;
+              const cwdName = typeof group.cwd === 'string'
+                ? group.cwd.split('/').filter(Boolean).pop()
+                : undefined;
+              return h('section', { key: group.key, style: { marginBottom: 18 } },
+                h('div', {
+                  role: 'button',
+                  tabIndex: 0,
+                  'aria-expanded': open,
+                  onClick: () => toggle(group.key),
+                  onKeyDown: (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      toggle(group.key);
+                    }
+                  },
+                  style: {
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    flexWrap: 'wrap',
+                    padding: '6px 2px',
+                    cursor: 'pointer',
+                    userSelect: 'none',
+                    borderBottom: '1px solid color-mix(in oklab, currentColor 10%, transparent)',
+                  },
+                },
+                  h('span', { style: { width: 12, fontSize: 11, opacity: 0.55 } }, open ? '▾' : '▸'),
+                  h('span', {
+                    style: {
+                      width: 8,
+                      height: 8,
+                      borderRadius: '50%',
+                      background: group.running > 0
+                        ? 'var(--color-green-500, #34d399)'
+                        : group.error > 0
+                          ? 'var(--color-red-500, #f87171)'
+                          : 'color-mix(in oklab, currentColor 35%, transparent)',
+                    },
+                  }),
+                  h('span', { style: { fontSize: 12.5, fontWeight: 600 } }, title),
+                  cwdName !== undefined
+                    ? h('span', { style: { ...chip, opacity: 0.75, fontFamily: 'ui-monospace, monospace' } }, cwdName)
+                    : null,
+                  group.running > 0
+                    ? h('span', { style: { ...chip, color: 'var(--color-amber-500, #fbbf24)' } }, `${group.running} ${t.running}`)
+                    : null,
+                  group.error > 0
+                    ? h('span', { style: { ...chip, color: 'var(--color-red-500, #f87171)' } }, `${group.error} ${t.filterError}`)
+                    : null,
+                  h('span', { style: { fontSize: 11, opacity: 0.5 } }, `${group.runs.length} ${t.runsUnit}`),
+                  h('span', { style: { marginLeft: 'auto', fontSize: 11, opacity: 0.5 } }, ago(group.lastAt, now))),
+                open
+                  ? h('div', { style: { paddingTop: 10 } },
+                    group.runs.map((run) => h(RunCard, { key: run.id, run, t, showCwd: false })))
+                  : null);
+            })));
+    }
+
     function Icon({ size = 20 }) {
       return h('svg', {
         width: size,
@@ -748,6 +983,32 @@ window.__ModuleLoader__.load({
           } catch (error) {
             console.error('[dsh-opencode-live] right sidebar registration failed', error);
           }
+        });
+
+        ctx.effect(() => {
+          // Left rail entry + global page, mirroring how dsh-context pairs
+          // `sidebar.panellist` (id) with `main` (key). Right panel is untouched.
+          const disposers = [
+            ctx.slots.inject('main', () => ctx.slots.register({
+              name: 'main',
+              key: 'opencode-live',
+            }, () => h(PanelBoundary, null, h(GlobalPanel, { ctx })))),
+            ctx.slots.inject('sidebar.panellist', () => ctx.slots.register({
+              name: 'sidebar.panellist',
+              id: 'opencode-live',
+              order: 30,
+              label: () => 'OpenCode Live',
+            }, ({ size = 16, active = false } = {}) => h(LiveIcon, { size, active }))),
+          ];
+          return () => {
+            for (const dispose of disposers) {
+              try {
+                dispose();
+              } catch {
+                // already disposed
+              }
+            }
+          };
         });
 
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({

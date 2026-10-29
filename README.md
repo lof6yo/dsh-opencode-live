@@ -3,10 +3,15 @@
 把 [OpenCode](https://opencode.ai) 当作 DSH 的子智能体来用，并把它**实际**使用的 agent、工具调用和它自己派生的子 agent（fixer、explorer…）实时显示在 DSH 的一个面板里。
 
 - **委派**：DSH 里的 `opencode` 工具，一次任务启动一个独立的 `opencode acp` 子进程；
-- **实时**：Host 端把 ACP 事件镜像成 trace，原生面板（Client 插件，`main` + 侧边栏图标）直接渲染；数据走 `/opencode-live/state` + `/opencode-live/events`（SSE），不再提供 HTML 页面；
+- **实时**：Host 端把 ACP 事件镜像成 trace，Client 插件直接渲染：右侧栏按会话显示，左侧栏图标进入**全局页**汇总所有会话；数据走 `/opencode-live/state` + `/opencode-live/events`（SSE），不再提供 HTML 页面；
 - **不多加耦合**：OpenCode 用它自己的配置、模型和认证，DSH 只传 cwd + 任务文本。
 
-装好并重启后，右侧边栏的「+」引导页里会出现 **OpenCode Live**，点开就是一个常驻的右侧标签页（和文件预览、浏览器同一栏），与 DSH 同主题、不经过 iframe。
+装好并重启后：
+
+- **右侧边栏**的「+」引导页里会出现 **OpenCode Live**，点开是一个常驻标签页，只显示**当前会话**的委派；
+- **左侧栏**出现 **OpenCode Live** 图标，点开是**全局页**，按会话分组汇总所有会话的委派（running/error 优先），页面右侧标注「所有 session」，并可一键「返回对话」。
+
+两个视图共用同一条 SSE 全局流和同一套卡片渲染；打开全局页会替换中央对话区，右栏标签页内容此时隐藏，返回对话即恢复。
 
 ## 面板里能看到什么
 
