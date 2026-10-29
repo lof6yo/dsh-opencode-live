@@ -753,7 +753,7 @@ window.__ModuleLoader__.load({
         ctx.effect(() => ctx.slots.inject('settings.section', () => ctx.slots.register({
           name: 'settings.section',
           id: 'opencode-live',
-          order: 21,
+          order: 18,
           label: () => 'OpenCode Live',
         }, () => h(Section, { ctx }))));
 
