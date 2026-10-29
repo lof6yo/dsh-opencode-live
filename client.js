@@ -542,11 +542,7 @@ window.__ModuleLoader__.load({
               width: 8,
               height: 8,
               borderRadius: '50%',
-              background: run.status === 'running'
-                ? 'var(--color-amber-500, #fbbf24)'
-                : run.status === 'error'
-                  ? 'var(--color-red-500, #f87171)'
-                  : 'var(--color-green-500, #34d399)',
+              background: runDot(run),
             },
           }),
           showCwd
@@ -828,6 +824,16 @@ window.__ModuleLoader__.load({
         }
       }
       return undefined;
+    }
+
+    function runDot(run) {
+      if (run.status === 'running') {
+        return lastPermissionDecision(run) === 'asking'
+          ? 'var(--color-amber-500, #fbbf24)'
+          : 'var(--color-green-500, #34d399)';
+      }
+      if (run.status === 'error') return 'var(--color-red-500, #f87171)';
+      return 'color-mix(in oklab, currentColor 22%, transparent)';
     }
 
     function groupDot(group) {
