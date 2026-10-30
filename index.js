@@ -90,12 +90,22 @@ export function apply(ctx, config = {}) {
 
   ctx.effect(() => ctx.subagents.registerProvider(provider));
   ctx.effect(() => () => {
+    // Unload/reload: close panel sockets (they reconnect to the next hub),
+    // reclaim any ACP child still running, and let the history write finish.
+    hub.dispose();
+    void provider.dispose();
     void history.flush();
   });
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: resolved.path,
     handler: createHandler(resolved, hub, ctx, ready),
+  }));
+  // The browser half cannot read the loader row config, so publish the route
+  // path through the host's per-page inject table (the channel the stock client
+  // plugins use). Without it the client would hardcode `/opencode-live`.
+  ctx.effect(() => ctx.on('webserver/index-inject', (table) => {
+    table.push({ kind: 'global', name: '__DSH_OPENCODE_LIVE__', value: { path: resolved.path } });
   }));
 
   try {
@@ -138,8 +148,32 @@ function normalizeConfig(config) {
   };
 }
 
+/**
+ * Reuse the host Web UI's own admission instead of inventing a parallel scheme:
+ * `ctx.connection.requestRejection` returns 403 for a foreign Origin or an
+ * untrusted Host (DNS rebinding) and 401 for a missing/invalid `dsh-auth-*`
+ * cookie — the exact conditions under which the UI beside us is refused too.
+ * Without that service the route has no access control, so it fails closed.
+ */
+function connectionRejection(ctx, req) {
+  const connection = typeof ctx.get === 'function' ? ctx.get('connection') : undefined;
+  if (connection === undefined || typeof connection.requestRejection !== 'function') return 403;
+  return connection.requestRejection(req);
+}
+
 function createHandler(config, hub, ctx, ready) {
-  return (req, res) => {
+  const handle = (req, res) => {
+    // Before any route logic, so no trace data is ever serialized for a caller
+    // the DSH web UI itself would have rejected.
+    const rejection = connectionRejection(ctx, req);
+    if (rejection !== undefined) {
+      res.writeHead(rejection, {
+        'content-type': 'application/json; charset=utf-8',
+        'cache-control': 'no-store',
+      });
+      res.end(JSON.stringify({ ok: false, error: rejection === 401 ? 'unauthorized' : 'forbidden' }));
+      return;
+    }
     let url;
     try {
       url = new URL(req.url ?? '/', 'http://localhost');
@@ -172,7 +206,9 @@ function createHandler(config, hub, ctx, ready) {
           res.end(JSON.stringify({ ok: false, error: 'content-type-must-be-application-json' }));
           return undefined;
         }
-        void saveConfigRoute(req, res, ctx);
+        // The route must never reject outward: the host turns an unhandled
+        // rejection into process.exit(1).
+        void saveConfigRoute(req, res, ctx).catch(() => failRequest(res));
         return undefined;
       }
       res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' });
@@ -183,6 +219,32 @@ function createHandler(config, hub, ctx, ready) {
     res.end('not found');
     return undefined;
   };
+  return (req, res) => {
+    try {
+      handle(req, res);
+    } catch (error) {
+      ctx.logger?.warn?.(`opencode-live: route failed: ${error?.message ?? error}`);
+      failRequest(res);
+    }
+  };
+}
+
+/** Last-resort response path: never touch a response whose headers went out. */
+function failRequest(res) {
+  try {
+    if (res.headersSent || res.writableEnded) {
+      res.destroy?.();
+      return;
+    }
+    res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: 'internal' }));
+  } catch {
+    try {
+      res.destroy?.();
+    } catch {
+      // the socket is already gone
+    }
+  }
 }
 
 /** Base path: a small machine-readable statement. */
@@ -220,10 +282,13 @@ function serveEvents(req, res, hub, sessionId) {
   res.write(': opencode-live\n\n');
 
   let saturated = false;
+  let closed = false;
+  let unsubscribe = () => {};
   const send = (payload) => {
     // One slow browser must not grow the socket buffer without bound: while the
     // stream is saturated, high-frequency event frames are dropped (the client
     // re-syncs from the next snapshot).
+    if (closed) return;
     if (saturated && payload !== undefined && payload.type === 'event') return;
     if (!res.write(`data: ${JSON.stringify(payload)}\n\n`)) saturated = true;
   };
@@ -232,22 +297,40 @@ function serveEvents(req, res, hub, sessionId) {
   });
   send({ type: 'snapshot', runs: hub.snapshot(sessionId) });
 
-  const unsubscribe = hub.subscribe(send, sessionId);
   const heartbeat = setInterval(() => {
+    if (closed || saturated) return;
     res.write(': ping\n\n');
   }, 15000);
   heartbeat.unref?.();
 
-  const close = () => {
+  /** Unsubscribe exactly once, whether the client left or the hub was disposed. */
+  const close = (reason) => {
+    if (closed) return;
+    closed = true;
     clearInterval(heartbeat);
     unsubscribe();
+    if (reason !== 'dispose' || res.writableEnded) return;
+    try {
+      // On dispose the browser should reconnect against the next hub quickly.
+      res.write('retry: 500\n\n');
+      res.end();
+    } catch {
+      res.destroy?.();
+    }
   };
+  unsubscribe = hub.subscribe(send, sessionId, close);
   req.on('close', close);
   req.on('error', close);
+  res.on('close', close);
   res.on('error', close);
 }
 
-/** Browsers send Sec-Fetch-Site same-origin or an Origin header for same-origin POSTs. */
+/**
+ * Browsers send Sec-Fetch-Site same-origin or an Origin header for same-origin
+ * POSTs. This is CSRF protection only — it is NOT authentication: any script
+ * can send those headers. Access control is enforced separately, up front, by
+ * `connectionRejection`.
+ */
 function sameOriginRequest(req) {
   const site = req.headers['sec-fetch-site'];
   if (site === 'same-origin') return true;
@@ -335,8 +418,12 @@ async function saveConfigRoute(req, res, ctx) {
   let body;
   try {
     body = await readJsonBody(req);
-  } catch {
+  } catch (error) {
     const tooLarge = error?.code === 'TOO_LARGE';
+    if (res.headersSent || res.writableEnded) {
+      res.destroy?.();
+      return;
+    }
     res.writeHead(tooLarge ? 413 : 400, { 'content-type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ ok: false, error: tooLarge ? 'body-too-large' : 'invalid-json' }));
     return;
@@ -359,18 +446,28 @@ async function saveConfigRoute(req, res, ctx) {
     res.end(JSON.stringify({ ok: false, error: 'nothing-to-save' }));
     return;
   }
-  // Answer first: the write reconciles the Loader and may reload this plugin.
-  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
-  res.end(JSON.stringify({ ok: true, saved: patch }));
-  void Promise.resolve()
-    .then(() => editor.edit(row.entry, (current) => {
+  // Write first, then answer: a silent failure would report "saved" for a
+  // profile patch that never landed. The Loader reload happens inside edit();
+  // this handler keeps its response object, so replying afterwards still works.
+  try {
+    await editor.edit(row.entry, (current) => {
       const next = { ...current, ...patch };
       for (const key of clear) delete next[key];
       return next;
-    }))
-    .catch((error) => {
-      ctx.logger?.warn?.(`opencode-live: config save failed: ${error?.message ?? error}`);
     });
+  } catch (error) {
+    ctx.logger?.warn?.(`opencode-live: config save failed: ${error?.message ?? error}`);
+    if (res.headersSent || res.writableEnded) {
+      res.destroy?.();
+      return;
+    }
+    res.writeHead(500, { 'content-type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ ok: false, error: error?.message ?? 'save-failed' }));
+    return;
+  }
+  if (res.headersSent || res.writableEnded) return;
+  res.writeHead(200, { 'content-type': 'application/json; charset=utf-8' });
+  res.end(JSON.stringify({ ok: true, saved: patch }));
 }
 
 function readJsonBody(req, limit = 64 * 1024) {

@@ -4,7 +4,14 @@ window.__ModuleLoader__.load({
     const React = require('react');
     const h = React.createElement;
 
-    const BASE = '/opencode-live';
+    // The host publishes this row's `path` through the index inject table
+    // (`__DSH_OPENCODE_LIVE__`); fall back to the default so an older host that
+    // does not render it keeps working.
+    const BASE = (() => {
+      const injected = globalThis.__DSH_OPENCODE_LIVE__;
+      const path = typeof injected?.path === 'string' ? injected.path.replace(/\/+$/, '') : '';
+      return path.startsWith('/') ? path : '/opencode-live';
+    })();
     const MAX_EVENTS_PER_RUN = 600;
 
     const TEXT = {
