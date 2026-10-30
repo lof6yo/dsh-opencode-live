@@ -14,7 +14,10 @@
  * @module dsh-opencode-live
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import z from '@deepseek-ai/schemastery';
+import { createHistory } from './lib/history.js';
 import { LiveProvider } from './lib/provider.js';
 import { TraceHub } from './lib/trace.js';
 
@@ -43,6 +46,12 @@ export const Config = z.object({
     .description('How long an ask question may stay unanswered, in milliseconds; 0 waits forever. After it, askFallback applies.'),
   promptTimeoutMs: z.number().default(1800000)
     .description('Hard upper bound for one OpenCode turn, in milliseconds; 0 disables the bound.'),
+  historyRuns: z.number().default(30)
+    .description('Runs kept on disk across restarts; 0 disables persistence.'),
+  historyDays: z.number().default(7)
+    .description('Drop persisted runs older than this many days; 0 keeps them until the run cap.'),
+  historyEvents: z.number().default(200)
+    .description('Events persisted per run (the newest ones).'),
   env: z.dict(z.string()).default({}).description('Extra environment for the child, merged after credential scrubbing.'),
   path: z.string().default('/opencode-live').description('Route that serves the panel data (state + SSE).'),
   model: z.string().description('Pin the ACP session model, e.g. opencode-go/deepseek-v4.1-flash. Omit to keep the OpenCode default.'),
@@ -61,14 +70,32 @@ export const Config = z.object({
  */
 export function apply(ctx, config = {}) {
   const resolved = normalizeConfig(config);
-  const hub = new TraceHub();
+  let history;
+  const hub = new TraceHub({ onFinish: (runs) => history?.schedule(runs) });
+  history = createHistory({
+    file: join(process.env.DSH_HOME ?? join(homedir(), '.dsh'), 'opencode-live', 'history.json'),
+    maxRuns: resolved.historyRuns,
+    maxEventsPerRun: resolved.historyEvents,
+    retentionDays: resolved.historyDays,
+    logger: ctx.logger,
+  });
+  const ready = history.load()
+    .then((runs) => {
+      hub.restore(runs);
+    })
+    .catch((error) => {
+      ctx.logger?.warn?.(`opencode-live: history load failed: ${error?.message ?? error}`);
+    });
   const provider = new LiveProvider({ ctx, config: resolved, hub });
 
   ctx.effect(() => ctx.subagents.registerProvider(provider));
+  ctx.effect(() => () => {
+    void history.flush();
+  });
   ctx.effect(() => ctx.webServer.register({
     kind: 'prefix',
     path: resolved.path,
-    handler: createHandler(resolved, hub, ctx),
+    handler: createHandler(resolved, hub, ctx, ready),
   }));
 
   try {
@@ -78,6 +105,11 @@ export function apply(ctx, config = {}) {
     // getOrigin throws before the listener binds; the route still works afterwards.
     ctx.logger.debug?.(`opencode-live: panel origin unavailable: ${error?.message ?? error}`);
   }
+}
+
+function clampInt(value, min, max, fallback) {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
+  return Math.max(min, Math.min(max, Math.round(value)));
 }
 
 function normalizeConfig(config) {
@@ -97,13 +129,16 @@ function normalizeConfig(config) {
     promptTimeoutMs: typeof config.promptTimeoutMs === 'number' && Number.isFinite(config.promptTimeoutMs) && config.promptTimeoutMs >= 0
       ? Math.min(config.promptTimeoutMs, MAX_TIMEOUT_MS)
       : 1800000,
+    historyRuns: clampInt(config.historyRuns, 0, 50, 30),
+    historyDays: clampInt(config.historyDays, 0, 365, 7),
+    historyEvents: clampInt(config.historyEvents, 0, 600, 200),
     env: config.env !== null && typeof config.env === 'object' ? config.env : {},
     mode: typeof config.mode === 'string' && config.mode.length > 0 ? config.mode : undefined,
     model: typeof config.model === 'string' && config.model.length > 0 ? config.model : undefined,
   };
 }
 
-function createHandler(config, hub, ctx) {
+function createHandler(config, hub, ctx, ready) {
   return (req, res) => {
     let url;
     try {
@@ -116,8 +151,14 @@ function createHandler(config, hub, ctx) {
     const path = url.pathname.replace(/\/+$/, '') || '/';
     const sessionId = url.searchParams.get('sessionId') ?? undefined;
     if (path === config.path) return serveInfo(res);
-    if (path === `${config.path}/state`) return serveState(res, hub, sessionId);
-    if (path === `${config.path}/events`) return serveEvents(req, res, hub, sessionId);
+    if (path === `${config.path}/state`) {
+      void ready.then(() => serveState(res, hub, sessionId)).catch(() => {});
+      return undefined;
+    }
+    if (path === `${config.path}/events`) {
+      void ready.then(() => serveEvents(req, res, hub, sessionId)).catch(() => {});
+      return undefined;
+    }
     if (path === `${config.path}/config`) {
       if (req.method === 'GET' || req.method === undefined) return serveConfig(res, ctx);
       if (req.method === 'POST') {

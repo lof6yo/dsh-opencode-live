@@ -58,6 +58,12 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
     askTimeoutMs: 600000
     # 面板路径，默认 /opencode-live
     path: /opencode-live
+    # 跨重启保留最近 N 条 run（0 = 关闭持久化）
+    historyRuns: 30
+    # 早于 N 天的记录自动清理（0 = 不按时间清理）
+    historyDays: 7
+    # 每条 run 只持久化最近 N 条事件
+    historyEvents: 200
     # 传给子进程的环境变量（在凭据清洗之后合并）
     env: {}
     # 模型/agent 同样属于插件配置，可以在「设置 → 插件 → dsh-opencode-live」
@@ -66,6 +72,24 @@ bundle 同时声明了 `dsh.client`，所以安装后需要**重启一次 DSH**�
     # model: opencode-go/deepseek-v4.1-flash
     # mode: orchestrator
 ```
+
+## 历史记录与清理
+
+运行记录默认只在内存里；现在会把最近若干条镜像到磁盘，重启 DSH 后仍然可见。
+
+- 位置：`$DSH_HOME/opencode-live/history.json`（未设置时为 `~/.dsh/opencode-live/history.json`），权限 `0600`；
+- 写入时机：每次 run 结束（1 秒内多次结束合并成一次写），临时文件 + rename 原子替换；
+- 清理规则（加载和写入都会执行）：
+
+  | 配置 | 默认 | 作用 |
+  | --- | --- | --- |
+  | `historyRuns` | 30 | 最多保留多少条，超出丢最老的；`0` 关闭持久化 |
+  | `historyDays` | 7 | 早于 N 天的记录丢弃；`0` 不按时间清理 |
+  | `historyEvents` | 200 | 每条 run 只存最近的 N 条事件 |
+  | — | 2 MB | 单文件超过上限时继续丢最老的 run |
+
+- 文件损坏或版本不匹配：忽略并从空开始，不阻塞插件启动；
+- 重启时仍在 `running` 的记录会标记成 `done / aborted`，不会以绿灯回归。
 
 ## 安全边界
 
